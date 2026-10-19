@@ -1,0 +1,25 @@
+name: iPad client
+on:
+  push:
+    paths: ['ipad_app/**', '.github/workflows/ipad.yml']
+  pull_request:
+    paths: ['ipad_app/**', '.github/workflows/ipad.yml']
+permissions:
+  contents: read
+jobs:
+  core-and-simulator:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Document, raster, protocol and archive tests
+        working-directory: ipad_app
+        run: swift test
+      - name: Verify generated Xcode project
+        run: |
+          python3 ipad_app/tools/generate_project.py
+          git diff --exit-code -- ipad_app/CompositorPad.xcodeproj
+      - name: Native build, brush and UI tests
+        env:
+          COMPOSITOR_BUILD_DIR: ${{ runner.temp }}/ipad-verify
+        run: bash ipad_app/tools/verify_ipad.sh
