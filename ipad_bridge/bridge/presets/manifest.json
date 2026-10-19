@@ -1,0 +1,26 @@
+{
+  "formatVersion": 1,
+  "presets": [
+    {
+      "id": "paint-edit-v1",
+      "name": "FLUX.2 Klein 4B reference edit",
+      "description": "Edits the supplied crop using a text instruction and image reference. The worker applies the original grayscale mask as output alpha after download. The diffusion model does not receive the mask; this is not native masked inpainting.",
+      "technique": "reference_image_edit_then_masked_alpha",
+      "graph": "paint-edit-v1.json",
+      "input": "sRGB PNG crop; mask is preserved locally for final alpha",
+      "output": "One RGB PNG restored to original crop dimensions; worker must apply mask as RGBA alpha",
+      "modelMegapixels": 1.0,
+      "minimumInputSide": 16,
+      "maximumAspectRatio": 16,
+      "steps": 4,
+      "customNodesRequired": false,
+      "source": "API graph adapted from Comfy Org's official image_flux2_klein_image_edit_4b_distilled.json workflow template: https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_flux2_klein_image_edit_4b_distilled.json (MIT; see repository THIRD_PARTY_NOTICES.md).",
+      "bindings": {
+        "image": {"node": "1", "input": "image"},
+        "prompt": {"node": "7", "input": "text"},
+        "seed": {"node": "15", "input": "noise_seed"},
+        "outputPrefix": {"node": "23", "input": "filename_prefix"}
+      }
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+# Local Python / editor / OS state
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local credentials, pairing and certificates, wherever copied
+.env
+.env.*
+!.env.example
+pairing.json
+access-token.txt
+connection-private.json
+*.key
+*.pem
+*.p12
+*.pfx
+*.mobileprovision
+secrets/
+
+# Runtime data, generated files and models
+data*/
+runtime/
+test-output/
+smoke-output/
+deliverables/
+*.log
+*.sqlite*
+*.db
+*.db-*
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+models/
+artwork/
+*.procreate
+*.psd
+*.comp
+*.comp.zip
+
+# Xcode / Swift local state; project and shared schemes remain tracked
+DerivedData/
+build/
+.build/
+xcuserdata/
+*.xcuserstate
+.swiftpm/xcode/package.xcworkspace/xcuserdata/

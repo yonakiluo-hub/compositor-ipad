@@ -1,0 +1,69 @@
+# Compositor iPad
+
+原生 iPad 绘画与本地 ComfyUI 辅助编辑：iPad 发送画面和蒙版，Windows 使用 NVIDIA 显卡生成候选，iPad 将结果放回独立图层。
+
+**当前已实现 Windows 桥接 v0.1；原生 iPad 应用仍在开发阶段。** 这是用于 Mac 与 Windows 协作开发的主仓库。Git 同步源码、文档和测试，画稿、模型、运行数据库与配对凭据留在各自设备上。
+
+```text
+iPad 本机绘画与图层
+       │  局域网：画面、蒙版、任务状态
+       ▼
+Windows Local Bridge → 本机 ComfyUI / NVIDIA GPU
+       │  返回带透明度的 PNG 候选
+       └──────────────────────→ iPad 新图层
+```
+
+## 从这里开始
+
+| 工作 | 入口 |
+| --- | --- |
+| Mac agent 开发原生 iPad 端 | [Mac 开发交接](docs/MAC_AGENT_HANDOFF.md) |
+| Windows 启动服务，或 Mac 启动模拟后端 | [桥接安装与运行](ipad_bridge/README.md) |
+| 两端网络接口、坐标、蒙版、重试 | [API v1](ipad_bridge/docs/API_V1.md) |
+| 两台电脑同步代码 | [Git 协作流程](docs/GIT_WORKFLOW.md) |
+| 已验证内容与限制 | [Windows v0.1 状态](docs/WINDOWS_BRIDGE_STATUS.md) |
+
+克隆本仓库：
+
+```sh
+git clone https://github.com/yonakiluo-hub/compositor-ipad.git
+cd compositor-ipad
+```
+
+Windows 安装并启动模拟后端：
+
+```powershell
+cd ipad_bridge
+.\setup.ps1 -WithTests
+.\start-bridge.ps1
+```
+
+Mac 上先运行同一个模拟后端，不需要显卡：
+
+```sh
+cd ipad_bridge
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m bridge pairing --backend mock --data-dir data-mock --base-url http://127.0.0.1:8190
+.venv/bin/python -m bridge serve --backend mock --data-dir data-mock
+```
+
+桥接需要 Python 3.12 或以上。真实生成另需本机 ComfyUI 和指定模型，详见桥接 README。iPad 真机连接时使用服务所在电脑的局域网地址；不要把客户端的 `127.0.0.1` 当作 Windows 地址。
+
+## 当前范围
+
+- 已实现：认证、任务持久化、重试与恢复、结果下载、蒙版透明度处理、`.comp` ZIP 版本备份，以及模拟后端和固定真实生成预设。
+- 历史验证：Windows 上 62 项测试、81 个子测试通过，RTX 5080 完成真实 HTTP 生成闭环。Mac 和 iPad 真机联调仍待完成。
+- 当前预设使用 FLUX.2 Klein 4B 参考图编辑，再将蒙版应用到输出 alpha；蒙版尚不参与模型去噪，边缘融合与实际绘画质量需评估。
+- 暂不包含完整 Windows 画图软件、Procreate 实时插件、逐笔同步或云端账户服务。
+
+## 目录
+
+```text
+ipad_bridge/       Windows 服务、Mac 模拟后端与测试
+ipad_app/          原生 iPad 工程的预留目录
+docs/              交接、协作和状态文档
+licenses/          纳入的第三方许可证
+```
+
+参考项目：[Compositor-ZH](https://github.com/qidian2022/Compositor-ZH)、[ComfyUI Photoshop](https://github.com/NimaNzrii/comfyui-photoshop)。当前仓库不包含它们的应用源码。固定预设参考 Comfy Org 官方模板，声明见 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。本项目原创代码的整体许可证尚未指定，第三方材料按各自许可证提供。

@@ -1,0 +1,15 @@
+{
+  "protocolVersion": 1,
+  "clientRequestId": "replace-with-persisted-request-uuid",
+  "documentId": "replace-with-document-uuid",
+  "baseRevision": 1,
+  "sourceLayerIds": ["source-layer-1"],
+  "canvasSize": {"width": 1024, "height": 768},
+  "cropRect": {"x": 160, "y": 128, "width": 512, "height": 384},
+  "inputSize": {"width": 512, "height": 384},
+  "colorSpace": "sRGB",
+  "maskConvention": "white_edit_black_preserve",
+  "workflowPreset": "paint-edit-v1",
+  "prompt": "Turn the central terracotta fabric rectangle into blue silk with gentle folds and soft side lighting. Preserve the position, size and outline of the rectangle and preserve the surrounding composition.",
+  "seed": 20261019
+}

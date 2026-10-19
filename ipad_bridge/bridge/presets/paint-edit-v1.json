@@ -1,0 +1,23 @@
+{
+  "1": {"class_type": "LoadImage", "inputs": {"image": "source.png"}},
+  "2": {"class_type": "GetImageSize", "inputs": {"image": ["1", 0]}},
+  "4": {"class_type": "UNETLoader", "inputs": {"unet_name": "flux-2-klein-4b-fp8.safetensors", "weight_dtype": "default"}},
+  "5": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_3_4b.safetensors", "type": "flux2", "device": "default"}},
+  "6": {"class_type": "VAELoader", "inputs": {"vae_name": "flux2-vae.safetensors"}},
+  "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "Preserve composition and apply the requested material and lighting edit.", "clip": ["5", 0]}},
+  "8": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["7", 0]}},
+  "9": {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": ["1", 0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 16}},
+  "10": {"class_type": "GetImageSize", "inputs": {"image": ["9", 0]}},
+  "11": {"class_type": "VAEEncode", "inputs": {"pixels": ["9", 0], "vae": ["6", 0]}},
+  "12": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["7", 0], "latent": ["11", 0]}},
+  "13": {"class_type": "ReferenceLatent", "inputs": {"conditioning": ["8", 0], "latent": ["11", 0]}},
+  "14": {"class_type": "CFGGuider", "inputs": {"model": ["4", 0], "positive": ["12", 0], "negative": ["13", 0], "cfg": 1.0}},
+  "15": {"class_type": "RandomNoise", "inputs": {"noise_seed": 0}},
+  "16": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+  "17": {"class_type": "Flux2Scheduler", "inputs": {"steps": 4, "width": ["10", 0], "height": ["10", 1]}},
+  "18": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": ["10", 0], "height": ["10", 1], "batch_size": 1}},
+  "19": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["15", 0], "guider": ["14", 0], "sampler": ["16", 0], "sigmas": ["17", 0], "latent_image": ["18", 0]}},
+  "20": {"class_type": "VAEDecode", "inputs": {"samples": ["19", 0], "vae": ["6", 0]}},
+  "21": {"class_type": "ImageScale", "inputs": {"image": ["20", 0], "upscale_method": "lanczos", "width": ["2", 0], "height": ["2", 1], "crop": "disabled"}},
+  "23": {"class_type": "SaveImage", "inputs": {"images": ["21", 0], "filename_prefix": "iPadBridge/candidate"}}
+}
