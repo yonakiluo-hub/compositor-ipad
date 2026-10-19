@@ -17,7 +17,7 @@ for directory in ("bridge", "tests", "tools", "docs", "examples"):
 for name in ("README.md", "requirements.txt", "requirements-dev.txt", "requirements-lock.txt",
              "pytest.ini", ".gitignore", "setup.ps1", "start-bridge.ps1"):
     entries["ipad_bridge/" + name] = root / name
-for name in ("MAC_AGENT_HANDOFF.md", "WINDOWS_BRIDGE_STATUS.md"):
+for name in ("MAC_AGENT_HANDOFF.md", "WINDOWS_BRIDGE_STATUS.md", "PRODUCT_REQUIREMENTS.md"):
     entries["docs/" + name] = workspace / "docs" / name
 for name in ("README.md", "AGENTS.md", ".gitignore", ".gitattributes", "THIRD_PARTY_NOTICES.md"):
     entries[name] = workspace / name

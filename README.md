@@ -1,6 +1,8 @@
 # Compositor iPad
 
-原生 iPad 绘画与本地 ComfyUI 辅助编辑：iPad 发送画面和蒙版，Windows 使用 NVIDIA 显卡生成候选，iPad 将结果放回独立图层。
+以 Compositor-ZH 为优先移植与复用基础，开发覆盖 Photoshop 大多数常用绘画、修图、合成和图层编辑功能的原生 iPad 软件，适配 Apple Pencil 与触控。ComfyUI 是其中的 AI 辅助模块，由 Windows 本地显卡生成候选并返回 iPad。
+
+**最终目标是可日常使用的完整绘图与图像编辑软件。** 当前的“画布 → 蒙版 → AI → 新图层”闭环只是第一阶段；长期功能范围与验收见 [产品需求](docs/PRODUCT_REQUIREMENTS.md)。普通绘画、编辑、保存和导出应能在不连接 Windows 时独立使用。
 
 **当前已实现 Windows 桥接 v0.1；原生 iPad 应用仍在开发阶段。** 这是用于 Mac 与 Windows 协作开发的主仓库。Git 同步源码、文档和测试，画稿、模型、运行数据库与配对凭据留在各自设备上。
 
@@ -17,6 +19,7 @@ Windows Local Bridge → 本机 ComfyUI / NVIDIA GPU
 
 | 工作 | 入口 |
 | --- | --- |
+| 最终产品目标、功能范围和阶段路线 | [产品需求](docs/PRODUCT_REQUIREMENTS.md) |
 | Mac agent 开发原生 iPad 端 | [Mac 开发交接](docs/MAC_AGENT_HANDOFF.md) |
 | Windows 启动服务，或 Mac 启动模拟后端 | [桥接安装与运行](ipad_bridge/README.md) |
 | 两端网络接口、坐标、蒙版、重试 | [API v1](ipad_bridge/docs/API_V1.md) |

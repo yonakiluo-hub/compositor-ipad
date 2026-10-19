@@ -4,6 +4,8 @@ iPad 绘画 → 局域网上传画面和蒙版 → Windows ComfyUI 生成 → iP
 
 本目录是 Windows 侧可运行服务，也可以在 Mac 上使用模拟后端供 iPad 客户端开发。iPad 应用另由 Mac agent 实现。这里不包含 Procreate 插件，也不包含 Windows 绘图编辑器。
 
+完整产品目标是以 Compositor 为基础、覆盖 Photoshop 大多数常用功能的原生 iPad 编辑器，见 [产品需求](../docs/PRODUCT_REQUIREMENTS.md)。此目录只负责其中的 AI 与备份服务，普通绘画和编辑应在 iPad 离线运行。
+
 ## 现在能做什么
 
 - 带认证的画面、蒙版上传、持久任务队列与结果下载。
@@ -19,7 +21,7 @@ iPad 绘画 → 局域网上传画面和蒙版 → Windows ComfyUI 生成 → iP
 1. Windows 服务与 API v1 固定，Mac agent 同时建立原生 iPad 画布和网络客户端。
 2. Mac 本机运行 `mock`，验证裁切坐标、蒙版、结果图层、一次撤销、断网恢复。
 3. iPad 和 Windows 连同一个局域网，换成 Windows 配对信息，完成真实生成闭环。
-4. 闭环通过后，再扩充画笔体验、选区工具、工作流预设和画质优化。
+4. 闭环通过后，按产品需求继续推进完整常用编辑功能；Windows 侧同步完善 AI 预设、备份与恢复能力。
 
 Mac agent 从 [API v1](docs/API_V1.md)、[示例请求](examples/metadata.json) 和 [验证客户端](examples/smoke_client.py) 开始。旧交接文档中的接口草案由 API v1 替代。
 

@@ -1,6 +1,7 @@
 # Collaboration instructions
 
 - This repository is the shared source of truth for the iPad client and local Windows bridge. Do not edit older exported copies when working here.
+- Read `docs/PRODUCT_REQUIREMENTS.md` for product scope. The long-term target is a native iPad drawing and image editor covering most common Photoshop workflows, with Compositor as the priority port/reuse basis. The AI round trip is only the first milestone; basic editing must work offline. Do not treat a temporary flat canvas or PencilKit demo as the finished editor.
 - Read `README.md`, then `docs/MAC_AGENT_HANDOFF.md` for iPad work or `ipad_bridge/README.md` for backend work. The implemented protocol is `ipad_bridge/docs/API_V1.md`.
 - Put native iPad work under `ipad_app/`; preserve existing upstream license/notice files when introducing Compositor source. An iPad simulator build is not proof of Pencil or real-device operation.
 - Work on task branches (`mac/<task>` or `windows/<task>`) for concurrent development. Inspect Git status and preserve unrelated edits. Never force-push over another device's changes.
