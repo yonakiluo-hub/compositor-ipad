@@ -30,6 +30,16 @@ Mac agent 从 [API v1](docs/API_V1.md)、[示例请求](examples/metadata.json) 
 
 需要 Python 3.12 或以上。桥接服务使用独立环境，无需安装 PyTorch。ComfyUI 使用用户现有环境。
 
+### 一键启动与连接检查
+
+首次使用先运行 `setup.ps1` 安装桥接依赖；桌面窗口需要安装了 Tcl/Tk 的 Python。之后双击本目录的 **`Start-Windows.cmd`**，在“设置”中选择桥接 Python、现有 ComfyUI 安装、模型、原任务数据和 ComfyUI 工作文件夹，以及 iPad 所在网络的 Windows 地址。已有环境可以继续使用原来的虚拟环境；已有任务务必选择原数据文件夹。
+
+“检查状态”只读检查；“启动服务”复用已运行且匹配的服务，只启动缺少的部分。默认桥接端口是 `8190`，ComfyUI 本机端口是 `8388`。窗口会显示模型缺项、端口冲突、配对不一致和地址变化；不会自动安装模型、替换已有服务或修改防火墙。关闭窗口后服务继续运行。
+
+本机设置保存在已被 Git 忽略的 `launcher-private.json`。地址变化后，在设置中重新选择，点击“启动服务”更新配对文件，再将它私下传给 iPad 重新导入。多网卡时需选择与 iPad 连接同一网络的物理 Wi-Fi 或以太网地址。详见 [Windows 启动器使用说明](../docs/WINDOWS_LAUNCHER.md)，包含配置字段、命令行和连接排查。
+
+### 手动启动
+
 在本目录 PowerShell 中：
 
 ```powershell
