@@ -1,0 +1,214 @@
+import SwiftUI
+import UIKit
+
+struct CanvasView: UIViewRepresentable {
+    @ObservedObject var model: EditorModel
+    func makeUIView(context: Context) -> PadCanvasView { PadCanvasView(model: model) }
+    func updateUIView(_ view: PadCanvasView, context: Context) { view.update() }
+}
+
+final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
+    let model: EditorModel
+    var viewport = CanvasViewport()
+    private var resetToken = -1
+    private var panGesture: UIPanGestureRecognizer!
+    private var stroke: PadBrushStroke?
+    private var strokeImage: CGImage?
+    private var strokeLayer: RasterLayer?
+    private var strokeRevision: Int64 = 0
+    private var strokeDocumentID: UUID?
+    private var gestureTool: PadTool = .brush
+    private var startPoint: CGPoint?
+    private var selectionRect: CGRect?
+    private var moveDelta = CGPoint.zero
+    private var inputTouch: UITouch?
+
+    init(model: EditorModel) {
+        self.model = model; super.init(frame: .zero)
+        isMultipleTouchEnabled = true; isOpaque = true
+        backgroundColor = UIColor(red: 0.10, green: 0.12, blue: 0.15, alpha: 1)
+        isAccessibilityElement = true
+        accessibilityIdentifier = "editor.canvas"
+        accessibilityLabel = "绘画画布"
+        panGesture = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
+        panGesture.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        panGesture.delegate = self; addGestureRecognizer(panGesture)
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinch(_:)))
+        pinch.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        pinch.delegate = self; addGestureRecognizer(pinch)
+        let undo = UITapGestureRecognizer(target: self, action: #selector(undoTap))
+        undo.numberOfTouchesRequired = 2; undo.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        addGestureRecognizer(undo)
+        let redo = UITapGestureRecognizer(target: self, action: #selector(redoTap))
+        redo.numberOfTouchesRequired = 3; redo.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        addGestureRecognizer(redo)
+    }
+    required init?(coder: NSCoder) { fatalError("Use init(model:)") }
+    private var inputIsCurrent: Bool {
+        model.document.id == strokeDocumentID && model.document.revision == strokeRevision && model.tool == gestureTool
+            && (strokeLayer == nil || model.document.activeLayerID == strokeLayer?.id)
+    }
+    func update() {
+        if inputTouch != nil && !inputIsCurrent { cancelInput() }
+        if model.viewportReset != resetToken { resetToken = model.viewportReset; viewport.fit(documentSize: model.document.size) }
+        panGesture.minimumNumberOfTouches = model.fingerDrawing ? 2 : 1
+        setNeedsDisplay()
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        viewport.resize(to: bounds.size, backingScale: window?.screen.scale ?? 2, documentSize: model.document.size)
+        setNeedsDisplay()
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        !(inputTouch?.type == .pencil && touch.type == .direct)
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        gestureRecognizer is UIPinchGestureRecognizer || other is UIPinchGestureRecognizer
+    }
+    @objc private func pan(_ gesture: UIPanGestureRecognizer) {
+        cancelInput()
+        let delta = gesture.translation(in: self)
+        viewport.translate(by: CGSize(width: delta.x, height: delta.y)); gesture.setTranslation(.zero, in: self); setNeedsDisplay()
+    }
+    @objc private func pinch(_ gesture: UIPinchGestureRecognizer) {
+        cancelInput()
+        viewport.setZoom(viewport.zoom * gesture.scale, anchoredAt: gesture.location(in: self), documentSize: model.document.size)
+        gesture.scale = 1; setNeedsDisplay()
+    }
+    @objc private func undoTap() { cancelInput(); model.undo() }
+    @objc private func redoTap() { cancelInput(); model.redo() }
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        backgroundColor?.setFill(); context.fill(bounds)
+        let canvas = viewport.documentRect(model.document.size)
+        context.saveGState(); context.clip(to: canvas)
+        context.setFillColor(UIColor.white.cgColor); context.fill(canvas)
+        let tile: CGFloat = 16
+        if canvas.width / tile < 200, canvas.height / tile < 200 {
+            context.setFillColor(UIColor(white: 0.94, alpha: 1).cgColor)
+            for y in 0...Int(canvas.height / tile) { for x in 0...Int(canvas.width / tile) where (x + y) % 2 == 0 {
+                context.fill(CGRect(x: canvas.minX + CGFloat(x) * tile, y: canvas.minY + CGFloat(y) * tile, width: tile, height: tile))
+            } }
+        }
+        var image = model.preview
+        if let strokeLayer, let strokeImage, !gestureTool.isSelection {
+            image = try? model.renderer.render(model.document, replacing: strokeLayer.id, with: strokeImage)
+        } else if let layer = strokeLayer, gestureTool == .move, startPoint != nil {
+            var doc = model.document
+            if let i = doc.layers.firstIndex(where: { $0.id == layer.id }) {
+                doc.layers[i].transform.origin.x = layer.transform.origin.x + moveDelta.x
+                doc.layers[i].transform.origin.y = layer.transform.origin.y + moveDelta.y
+                image = try? model.renderer.render(doc)
+            }
+        }
+        if let image { RasterImage.draw(image, in: canvas, context: context) }
+        let selection = gestureTool.isSelection && strokeImage != nil ? strokeImage : model.selectionPreview
+        if let selection {
+            context.saveGState(); RasterImage.clip(selection, to: canvas, context: context)
+            context.setFillColor(UIColor.systemTeal.withAlphaComponent(0.28).cgColor); context.fill(canvas); context.restoreGState()
+        }
+        if let selectionRect {
+            let a = viewport.viewPoint(from: selectionRect.origin, documentSize: model.document.size)
+            let box = CGRect(origin: a, size: CGSize(width: selectionRect.width * viewport.pointsPerPixel, height: selectionRect.height * viewport.pointsPerPixel))
+            context.setStrokeColor(UIColor.systemTeal.cgColor); context.setLineWidth(2); context.setLineDash(phase: 0, lengths: [6, 4])
+            if gestureTool == .ellipse { context.strokeEllipse(in: box) } else { context.stroke(box) }
+        }
+        context.restoreGState()
+        if model.tool == .move, let layer = model.activeLayer {
+            let t = layer.transform
+            let corners = [CGPoint(x: 0,y: 0), CGPoint(x: 1,y: 0), CGPoint(x: 1,y: 1), CGPoint(x: 0,y: 1)]
+                .map { viewport.viewPoint(from: t.point($0), documentSize: model.document.size) }
+            context.setStrokeColor(UIColor.systemTeal.cgColor); context.setLineWidth(1.5)
+            context.addLines(between: corners + [corners[0]]); context.strokePath()
+        }
+    }
+    private func documentPoint(_ touch: UITouch) -> CGPoint {
+        viewport.documentPoint(from: touch.location(in: self), documentSize: model.document.size)
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard inputTouch == nil, touches.count == 1, let touch = touches.first,
+              touch.type == .pencil || model.fingerDrawing else { return }
+        inputTouch = touch; gestureTool = model.tool; strokeRevision = model.document.revision; strokeDocumentID = model.document.id
+        let point = documentPoint(touch)
+        guard CGRect(origin: .zero, size: model.document.size).contains(point) else { cancelInput(); return }
+        startPoint = point
+        do {
+            if gestureTool == .eyedropper { sampleColor(point); return }
+            if gestureTool == .rectangle || gestureTool == .ellipse { return }
+            if gestureTool.isSelection {
+                let original = try model.selectionPreview ?? RasterImage.solidMask(width: model.document.width, height: model.document.height, white: gestureTool == .maskErase)
+                stroke = try PadBrushStroke(width: model.document.width, height: model.document.height, original: original,
+                                            settings: model.brushSettings, selection: nil, maskMode: true)
+            } else {
+                guard let layer = model.activeLayer, !layer.isGroup else { throw DocumentError.invalid("请选择一个普通图层") }
+                guard !model.document.isEffectivelyLocked(layer.id) else { throw DocumentError.lockedLayer }
+                strokeLayer = layer
+                if gestureTool == .move { return }
+                let size = try model.renderer.pixelSize(of: layer)
+                stroke = try PadBrushStroke(width: Int(size.width), height: Int(size.height), original: model.renderer.image(for: layer),
+                                            settings: model.brushSettings,
+                                            selection: model.renderer.localSelection(model.selectionPreview, layer: layer, document: model.document), maskMode: false,
+                                            brushToPixels: model.renderer.pixelToDocument(layer, size: size).inverted())
+            }
+            add(touch, event: event)
+        } catch { model.errorMessage = error.localizedDescription; cancelInput() }
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = inputTouch, touches.contains(touch), let startPoint else { return }
+        guard inputIsCurrent else { cancelInput(); return }
+        let point = documentPoint(touch)
+        if gestureTool == .move { moveDelta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y) }
+        else if gestureTool == .rectangle || gestureTool == .ellipse {
+            selectionRect = CGRect(x: min(startPoint.x, point.x), y: min(startPoint.y, point.y), width: abs(point.x - startPoint.x), height: abs(point.y - startPoint.y))
+        } else if gestureTool == .eyedropper { sampleColor(point) }
+        else { add(touch, event: event) }
+        setNeedsDisplay()
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard let touch = inputTouch, touches.contains(touch) else { return }
+        defer { cancelInput() }
+        guard inputIsCurrent else { return }
+        touchesMoved(touches, with: nil)
+        do {
+            if gestureTool == .move, let layer = strokeLayer {
+                let delta = moveDelta
+                model.updateLayer("移动图层") { $0.transform.origin = CGPoint(x: layer.transform.origin.x + delta.x, y: layer.transform.origin.y + delta.y) }
+            } else if gestureTool == .rectangle || gestureTool == .ellipse, let selectionRect {
+                let context = try RasterImage.context(width: model.document.width, height: model.document.height, gray: true)
+                context.setFillColor(gray: 1, alpha: 1)
+                if gestureTool == .ellipse { context.fillEllipse(in: selectionRect) } else { context.fill(selectionRect) }
+                if let image = context.makeImage() { model.commitSelection(image) }
+            } else if let stroke {
+                add(touch, event: nil)
+                let image = try stroke.image()
+                if gestureTool.isSelection { model.commitSelection(image) } else { model.commitPixels(image) }
+            }
+        } catch { model.errorMessage = error.localizedDescription }
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { cancelInput() }
+    private func add(_ touch: UITouch, event: UIEvent?) {
+        guard let stroke else { return }
+        for sample in event?.coalescedTouches(for: touch) ?? [touch] {
+            var point = documentPoint(sample)
+            if let layer = strokeLayer { point = point.applying(model.renderer.pixelToDocument(layer, size: stroke.size).inverted()) }
+            let pressure = sample.type == .pencil && sample.maximumPossibleForce > 0 ? min(1, max(0.05, sample.force / sample.maximumPossibleForce)) : 1
+            stroke.add(BrushSample(point: point, pressure: pressure, altitude: sample.type == .pencil ? sample.altitudeAngle : .pi / 2,
+                                   azimuth: sample.type == .pencil ? sample.azimuthAngle(in: self) : 0))
+        }
+        do { strokeImage = try stroke.image(); setNeedsDisplay() } catch { model.errorMessage = error.localizedDescription; cancelInput() }
+    }
+    private func sampleColor(_ point: CGPoint) {
+        guard let image = model.preview, point.x >= 0, point.y >= 0, point.x < CGFloat(image.width), point.y < CGFloat(image.height),
+              let crop = image.cropping(to: CGRect(x: Int(point.x), y: Int(point.y), width: 1, height: 1)),
+              let context = try? RasterImage.context(width: 1, height: 1) else { return }
+        RasterImage.draw(crop, in: CGRect(x: 0, y: 0, width: 1, height: 1), context: context)
+        if let bytes = context.data?.assumingMemoryBound(to: UInt8.self) {
+            let alpha = CGFloat(bytes[3]); guard alpha > 0 else { return }
+            model.color = Color(red: Double(CGFloat(bytes[0]) / alpha), green: Double(CGFloat(bytes[1]) / alpha), blue: Double(CGFloat(bytes[2]) / alpha))
+        }
+    }
+    private func cancelInput() {
+        stroke = nil; strokeLayer = nil; strokeImage = nil; startPoint = nil; selectionRect = nil
+        inputTouch = nil; strokeDocumentID = nil; moveDelta = .zero; setNeedsDisplay()
+    }
+}

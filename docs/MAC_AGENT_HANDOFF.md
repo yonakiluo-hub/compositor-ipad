@@ -2,6 +2,8 @@
 
 交接日期：2026 年 10 月 19 日，Asia/Shanghai。
 
+> 后续进展：本仓库现已新增可构建的原生 iPad 工程及基础编辑器。最新完成范围、构建命令、验证与限制以 [iPad 状态](IPAD_STATUS.md) 和 [客户端 README](../ipad_app/README.md) 为准。下文“尚未创建 iPad target”等内容是接手前的历史基线，不代表当前代码。
+
 接收方：在 Mac 上工作的开发 agent。开发环境由 Mac、iPad，以及运行 ComfyUI 的 Windows／NVIDIA 电脑组成。
 
 最终目标是以 Compositor-ZH 为优先移植与复用基础，做出覆盖 Photoshop 大多数常用绘画、修图、合成和图层编辑功能的原生 iPad 软件。ComfyUI 是其中的 AI 辅助模块：iPad 通过局域网提交画面与选区，Windows 生成候选并返回新图层。普通绘画、编辑、保存和导出必须在不连接 Windows 时也能使用。

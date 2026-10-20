@@ -16,6 +16,16 @@ This notice covers that adapted preset; it does not assign a license to the rest
 
 ComfyUI runs as a separately installed application. Python dependencies are installed from the requirements files and retain their respective licenses. Neither ComfyUI application code nor model weights are distributed in this repository.
 
-[Compositor-ZH](https://github.com/qidian2022/Compositor-ZH) is the reference for the planned iPad editor. Its Swift source is not currently included here. Any future imported or adapted files must preserve the applicable upstream license, copyright, and notices.
+## Compositor geometry and raster conventions
+
+The iPad editor includes and adapts code from [Compositor-ZH](https://github.com/qidian2022/Compositor-ZH), commit `7c2a5a4a3e7f685a8a0ec282ef0b4284f20b5477`, based on Compositor v1.5.3 by Robbie Tilton / Wonder Assembly LLC.
+
+- `ipad_app/Sources/Rendering/CanvasViewport.swift`: viewport geometry and anchored zoom.
+- `ipad_app/Sources/Core/LayerGeometry.swift`: layer transforms and pass-through hierarchy semantics.
+- `ipad_app/Sources/Rendering/RasterImage.swift`: normalized Gaussian brush falloff adapted from `BrushRaster.falloff`.
+- The native `.comp` reader/writer follows the inspected upstream v14 manifest and asset conventions; it implements an explicitly limited raster subset.
+- Copyright (c) 2026 Wonder Assembly LLC. MIT license retained in [licenses/Compositor-MIT.txt](licenses/Compositor-MIT.txt), with the original Chinese branch notice in [licenses/Compositor-ZH-NOTICE.md](licenses/Compositor-ZH-NOTICE.md).
+
+The iPad UIKit input layer, bridge client, persistence extension and UI are developed in this repository. This notice does not change the license of unrelated project code. See [the port matrix](docs/COMPOSITOR_PORT_MATRIX.md) for inspected upstream files and feature boundaries.
 
 [comfyui-photoshop](https://github.com/NimaNzrii/comfyui-photoshop) was reviewed as an integration reference; its Photoshop plugin and custom-node code are not included here.
