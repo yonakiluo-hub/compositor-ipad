@@ -211,4 +211,170 @@ final class RenderingTests: XCTestCase {
         viewport.setZoom(.nan, anchoredAt: anchor, documentSize: document)
         XCTAssertEqual(viewport, unchanged)
     }
+
+    private func grayValues(_ data: Data) throws -> [UInt8] {
+        let image = try RasterImage.decode(data)
+        XCTAssertEqual(image.bitsPerPixel, 8)
+        let raw = try XCTUnwrap(image.dataProvider?.data)
+        let bytes = try XCTUnwrap(CFDataGetBytePtr(raw))
+        return (0..<image.height).flatMap { y in (0..<image.width).map { bytes[y * image.bytesPerRow + $0] } }
+    }
+
+    func testCanvasGrowthPreservesPixelsAndSoftMaskWithOneUndo() throws {
+        let renderer = DocumentRenderer()
+        let colors = [red, green, blue, white, blue, red]
+        var foreground = try layer(rgbaImage(width: 3, height: 2, pixels: colors))
+        foreground.maskPNGData = try grayPNG(width: 3, height: 2, values: [0, 128, 255, 64, 255, 0])
+        let selection = try grayPNG(width: 3, height: 2, values: [0, 255, 0, 255, 0, 255])
+        let original = CanvasDocument(width: 3, height: 2, layers: [foreground], selectionMaskPNGData: selection)
+        let editor = try DocumentEditor(document: original)
+        let before = try pixels(renderer.render(original))
+        try editor.transaction("画布大小") { try renderer.resizeCanvas(&$0, width: 6, height: 4, resample: false) }
+        let resized = editor.document
+        XCTAssertEqual(editor.undoCount, 1)
+        XCTAssertNil(resized.selectionMaskPNGData)
+        let expanded = try XCTUnwrap(resized.layers.first)
+        let raw = try pixels(XCTUnwrap(renderer.image(for: expanded)))
+        let output = try pixels(renderer.render(resized))
+        for y in 0..<2 { for x in 0..<3 {
+            assertPixel(raw[y * 6 + x], colors[y * 3 + x]) // Including pixels hidden by the mask.
+            assertPixel(output[y * 6 + x], before[y * 3 + x])
+        } }
+        assertPixel(raw[3 * 6 + 5], [0, 0, 0, 0])
+        XCTAssertEqual(try grayValues(XCTUnwrap(expanded.maskPNGData)),
+                       [0, 128, 255, 255, 255, 255, 64, 255, 0, 255, 255, 255] + Array(repeating: 255, count: 12))
+        try editor.undo()
+        XCTAssertEqual(editor.document.layers, original.layers)
+        XCTAssertEqual(editor.document.size, original.size)
+        XCTAssertEqual(editor.document.selectionMaskPNGData, selection)
+        try editor.redo()
+        XCTAssertEqual(editor.document.layers, resized.layers)
+        XCTAssertEqual(editor.document.size, resized.size)
+        XCTAssertNil(editor.document.selectionMaskPNGData)
+    }
+
+    func testCanvasGrowthKeepsRotatedFlippedPixelLocationsAndDifferentResolutionMask() throws {
+        let renderer = DocumentRenderer()
+        let colors = [red, green, blue, white, blue, red]
+        for rotation in [CGFloat(0), 90, 180, 270] {
+            var foreground = try layer(rgbaImage(width: 3, height: 2, pixels: colors), origin: CGPoint(x: 2, y: 1))
+            foreground.transform.size = CGSize(width: 6, height: 4)
+            foreground.transform.rotation = rotation
+            foreground.transform.flipX = true
+            foreground.transform.flipY = true
+            foreground.maskPNGData = try grayPNG(width: 2, height: 1, values: [0, 128])
+            foreground.maskEnabled = false
+            foreground.isLocked = true
+            var document = CanvasDocument(width: 10, height: 8, layers: [foreground])
+            let before = try pixels(renderer.render(document))
+            let oldMap = renderer.pixelToDocument(foreground, size: CGSize(width: 3, height: 2))
+            try renderer.resizeCanvas(&document, width: 15, height: 11, resample: false)
+            let expanded = document.layers[0]
+            XCTAssertEqual(expanded.id, foreground.id)
+            XCTAssertTrue(expanded.isLocked)
+            XCTAssertFalse(expanded.maskEnabled)
+            let newSize = try renderer.pixelSize(of: expanded)
+            let newMap = renderer.pixelToDocument(expanded, size: newSize)
+            let offset = CGPoint.zero.applying(oldMap).applying(newMap.inverted())
+            XCTAssertEqual(offset.x, offset.x.rounded(), accuracy: 0.000001)
+            XCTAssertEqual(offset.y, offset.y.rounded(), accuracy: 0.000001)
+            let imagePixels = try pixels(XCTUnwrap(renderer.image(for: expanded)))
+            for y in 0..<2 { for x in 0..<3 {
+                let p = CGPoint(x: CGFloat(x) + 0.5, y: CGFloat(y) + 0.5)
+                let oldPosition = p.applying(oldMap)
+                let newPosition = CGPoint(x: p.x + offset.x, y: p.y + offset.y).applying(newMap)
+                XCTAssertEqual(oldPosition.x, newPosition.x, accuracy: 0.000001)
+                XCTAssertEqual(oldPosition.y, newPosition.y, accuracy: 0.000001)
+                assertPixel(imagePixels[(y + Int(offset.y.rounded())) * Int(newSize.width) + x + Int(offset.x.rounded())], colors[y * 3 + x])
+            } }
+            let output = try pixels(renderer.render(document))
+            for y in 0..<8 { for x in 0..<10 { assertPixel(output[y * 15 + x], before[y * 10 + x]) } }
+            let maskData = try XCTUnwrap(expanded.maskPNGData)
+            let mask = try RasterImage.decode(maskData), values = try grayValues(maskData)
+            let maskX = Int((offset.x * 2 / 3).rounded()), maskY = Int((offset.y / 2).rounded())
+            for y in 0..<mask.height { for x in 0..<mask.width {
+                let expected: UInt8 = y == maskY && x == maskX ? 0 : (y == maskY && x == maskX + 1 ? 128 : 255)
+                XCTAssertEqual(values[y * mask.width + x], expected)
+            } }
+            for corner in [CGPoint.zero, CGPoint(x: 15, y: 0), CGPoint(x: 0, y: 11), CGPoint(x: 15, y: 11)] {
+                let local = corner.applying(newMap.inverted())
+                XCTAssertGreaterThanOrEqual(local.x, -0.000001); XCTAssertGreaterThanOrEqual(local.y, -0.000001)
+                XCTAssertLessThanOrEqual(local.x, newSize.width + 0.000001); XCTAssertLessThanOrEqual(local.y, newSize.height + 0.000001)
+            }
+        }
+    }
+
+    func testCanvasShrinkAndNoOpPreserveOffCanvasPixelsAndRedo() throws {
+        let renderer = DocumentRenderer()
+        let foreground = try layer(rgbaImage(width: 3, height: 2, pixels: [red, green, blue, white, blue, red]))
+        let original = CanvasDocument(width: 3, height: 2, layers: [foreground])
+        let editor = try DocumentEditor(document: original)
+        try editor.transaction("画布大小") { try renderer.resizeCanvas(&$0, width: 2, height: 1, resample: false) }
+        XCTAssertEqual(editor.document.layers, original.layers)
+        try editor.undo()
+        let undone = editor.document
+        try editor.transaction("画布大小") { try renderer.resizeCanvas(&$0, width: 3, height: 2, resample: false) }
+        XCTAssertEqual(editor.document, undone)
+        XCTAssertTrue(editor.canRedo)
+        try editor.redo()
+        try editor.transaction("画布大小") { try renderer.resizeCanvas(&$0, width: 3, height: 2, resample: false) }
+        XCTAssertEqual(editor.document.layers, original.layers)
+        assertPixel(try pixels(renderer.render(editor.document))[5], red)
+    }
+
+    func testCanvasGrowthAllocationLimitFailsAtomically() throws {
+        let renderer = DocumentRenderer()
+        let blank = RasterLayer(transform: LayerTransform(size: CGSize(width: 2, height: 2)))
+        var small = try layer(rgbaImage(width: 2, height: 2, pixels: [red, green, blue, white]))
+        small.transform.size = CGSize(width: 1, height: 1)
+        let editor = try DocumentEditor(document: CanvasDocument(width: 2, height: 2, layers: [blank, small]))
+        try editor.setOpacity(layerID: small.id, opacity: 0.5)
+        try editor.undo()
+        let original = editor.document
+        XCTAssertThrowsError(try editor.transaction("画布大小") { try renderer.resizeCanvas(&$0, width: 4096, height: 2, resample: false) })
+        XCTAssertEqual(editor.document, original)
+        XCTAssertFalse(editor.canUndo)
+        XCTAssertTrue(editor.canRedo)
+    }
+
+    func testCanvasGrowthPadsBlankChildButImageResizeKeepsPixelAssets() throws {
+        let renderer = DocumentRenderer()
+        let group = RasterLayer(transform: LayerTransform(size: CGSize(width: 3, height: 2)), isGroup: true)
+        let blank = RasterLayer(transform: LayerTransform(size: CGSize(width: 3, height: 2)), parentID: group.id)
+        var document = CanvasDocument(width: 3, height: 2, layers: [group, blank])
+        try renderer.resizeCanvas(&document, width: 6, height: 4, resample: false)
+        XCTAssertEqual(document.layers[0], group)
+        XCTAssertEqual(document.layers[1].parentID, group.id)
+        XCTAssertEqual(try renderer.pixelSize(of: document.layers[1]), CGSize(width: 6, height: 4))
+        XCTAssertTrue(try pixels(renderer.render(document)).allSatisfy { $0 == [0, 0, 0, 0] })
+        let before = document.layers[1]
+        try renderer.resizeCanvas(&document, width: 12, height: 8, resample: true)
+        XCTAssertEqual(document.layers[1].pngData, before.pngData)
+        XCTAssertEqual(document.layers[1].transform.size, CGSize(width: 12, height: 8))
+    }
+
+    func testCanvasGrowthRejectsSamplingChangesWithoutRevealingHiddenPixels() throws {
+        let renderer = DocumentRenderer()
+        for maskValue in [nil, UInt8(0), UInt8(128)] {
+            for sampling in [LayerSampling.smooth, .high] {
+                var foreground = try layer(rgbaImage(width: 1, height: 1, pixels: [red]))
+                foreground.transform.size = CGSize(width: 4, height: 4)
+                foreground.transform.sampling = sampling
+                foreground.maskPNGData = try maskValue.map { try grayPNG(values: [$0]) }
+                let editor = try DocumentEditor(document: CanvasDocument(width: 4, height: 4, layers: [foreground]))
+                let original = editor.document, before = try pixels(renderer.render(original))
+                XCTAssertThrowsError(try editor.transaction("画布大小") { try renderer.resizeCanvas(&$0, width: 8, height: 8, resample: false) })
+                XCTAssertEqual(editor.document, original)
+                XCTAssertEqual(try pixels(renderer.render(editor.document)), before)
+                XCTAssertFalse(editor.canUndo)
+            }
+        }
+        // Even nearest sampling has an antialiased outer boundary at non-right angles.
+        var rotated = try layer(rgbaImage(width: 3, height: 2, pixels: [red, green, blue, white, blue, red]))
+        rotated.transform.rotation = 37
+        let editor = try DocumentEditor(document: CanvasDocument(width: 4, height: 4, layers: [rotated]))
+        let original = editor.document
+        XCTAssertThrowsError(try editor.transaction("画布大小") { try renderer.resizeCanvas(&$0, width: 8, height: 8, resample: false) })
+        XCTAssertEqual(editor.document, original)
+    }
 }

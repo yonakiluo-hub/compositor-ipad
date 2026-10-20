@@ -164,27 +164,30 @@ public actor BridgeSubmissionStore {
     private struct SnapshotManifest: Codable {
         let documentID: String
         let revision: Int64
-        let origin: String
-        let backend: String
         let sha256: String
+        // Earlier caches also contain origin/backend. Decode their archive unchanged;
+        // a frozen document version is independent of its eventual backup destination.
     }
 
     /// Load before exporting: even ZIP timestamps or active-layer selection can change archive bytes.
-    public func loadSnapshot(documentID: String, revision: Int64) throws -> BridgeSnapshotUpload? {
+    /// The caller explicitly selects the destination on each load. The returned upload stays
+    /// bound to that pairing, while the immutable archive can be backed up to another service.
+    public func loadSnapshot(documentID: String, revision: Int64, pairing: BridgePairing) throws -> BridgeSnapshotUpload? {
+        try pairing.validate()
         let root = try snapshotFolder(documentID: documentID, revision: revision)
         guard manager.fileExists(atPath: root.path) else { return nil }
         let manifest = try JSONDecoder().decode(SnapshotManifest.self, from: Data(contentsOf: root.appendingPathComponent("snapshot.json")))
         let archive = try Data(contentsOf: root.appendingPathComponent("project.comp.zip"))
         guard manifest.documentID == documentID, manifest.revision == revision,
               manifest.sha256 == bridgeSHA256(archive) else { throw BridgeError.storageCorrupted }
-        return BridgeSnapshotUpload(documentID: documentID, revision: revision, archive: archive, origin: manifest.origin, backend: manifest.backend)
+        return BridgeSnapshotUpload(documentID: documentID, revision: revision, archive: archive, origin: pairing.origin, backend: pairing.backend)
     }
 
     public func prepareSnapshot(documentID: String, revision: Int64, archive: Data, pairing: BridgePairing) throws -> BridgeSnapshotUpload {
         try pairing.validate()
         guard !archive.isEmpty, archive.count <= 64 * 1024 * 1024 else { throw BridgeError.invalidInput("备份归档大小无效") }
-        if let existing = try loadSnapshot(documentID: documentID, revision: revision) {
-            guard existing.archive == archive, existing.origin == pairing.origin, existing.backend == pairing.backend else {
+        if let existing = try loadSnapshot(documentID: documentID, revision: revision, pairing: pairing) {
+            guard existing.archive == archive else {
                 throw BridgeError.submissionConflict
             }
             return existing
@@ -195,10 +198,10 @@ public actor BridgeSubmissionStore {
         try manager.createDirectory(at: staging, withIntermediateDirectories: false)
         defer { try? manager.removeItem(at: staging) }
         try archive.write(to: staging.appendingPathComponent("project.comp.zip"), options: .atomic)
-        let manifest = SnapshotManifest(documentID: documentID, revision: revision, origin: pairing.origin, backend: pairing.backend, sha256: bridgeSHA256(archive))
+        let manifest = SnapshotManifest(documentID: documentID, revision: revision, sha256: bridgeSHA256(archive))
         try bridgeJSON(manifest).write(to: staging.appendingPathComponent("snapshot.json"), options: .atomic)
         try manager.moveItem(at: staging, to: destination)
-        guard let saved = try loadSnapshot(documentID: documentID, revision: revision) else { throw BridgeError.storageCorrupted }
+        guard let saved = try loadSnapshot(documentID: documentID, revision: revision, pairing: pairing) else { throw BridgeError.storageCorrupted }
         return saved
     }
 

@@ -159,6 +159,79 @@ final class CoreDocumentTests: XCTestCase {
         XCTAssertEqual(editor.document.layers[0].parentID, nil)
     }
 
+    func testDuplicatedGroupStaysBelowHigherSiblingWhenChildWasAddedLater() throws {
+        let size = CGSize(width: 32, height: 24)
+        let editor = try DocumentEditor(document: CanvasDocument(width: 32, height: 24))
+        let group = RasterLayer(name: "原组", transform: .init(size: size), isGroup: true)
+        let higher = RasterLayer(name: "上方图层", pngData: try png(), transform: .init(size: size))
+        let lateChild = RasterLayer(name: "后来添加的子层", pngData: try png(), transform: .init(size: size), parentID: group.id)
+        try editor.addLayer(group)
+        try editor.addLayer(higher)
+        try editor.addLayer(lateChild)
+        let before = editor.document
+        let undoCount = editor.undoCount
+        let duplicate = try editor.duplicateLayer(group.id)
+        let childCopy = try XCTUnwrap(editor.document.layers.first { $0.parentID == duplicate })
+        XCTAssertEqual(editor.document.layers.filter { $0.parentID == nil }.map(\.id), [group.id, duplicate, higher.id])
+        XCTAssertEqual(editor.document.renderLayers.map { $0.layer.id }, [lateChild.id, childCopy.id, higher.id])
+        XCTAssertEqual(childCopy.pngData, lateChild.pngData)
+        XCTAssertNotEqual(childCopy.id, lateChild.id)
+        XCTAssertEqual(editor.document.activeLayerID, duplicate)
+        XCTAssertEqual(editor.undoCount, undoCount + 1)
+        let duplicated = editor.document
+        try editor.undo()
+        XCTAssertEqual(editor.document.layers, before.layers)
+        XCTAssertEqual(editor.document.activeLayerID, before.activeLayerID)
+        try editor.redo()
+        XCTAssertEqual(editor.document.layers, duplicated.layers, "Redo must preserve duplicate layer identities and order")
+        XCTAssertEqual(editor.document.activeLayerID, duplicate)
+    }
+
+    func testDuplicatedNestedGroupRemapsDescendantsWithoutChangingSiblingOrderOrLocks() throws {
+        let size = CGSize(width: 32, height: 24)
+        let outer = RasterLayer(name: "外层组", transform: .init(size: size), opacity: 0.8, isGroup: true)
+        let group = RasterLayer(name: "待复制组", transform: .init(size: size), isLocked: true,
+                                opacity: 0.5, parentID: outer.id, isGroup: true)
+        let higher = RasterLayer(name: "同级上方图层", transform: .init(size: size), parentID: outer.id)
+        let rootHigher = RasterLayer(name: "根级上方图层", transform: .init(size: size))
+        let nested = RasterLayer(name: "内部组", transform: .init(size: size), opacity: 0.25, parentID: group.id, isGroup: true)
+        let leaf = RasterLayer(name: "带蒙版子层", pngData: try png(), transform: .init(size: size, rotation: 35, flipX: true),
+                               isVisible: false, isLocked: true, opacity: 0.6, blendMode: .multiply,
+                               parentID: nested.id, maskPNGData: try png(gray: true), maskEnabled: false)
+        let lastChild = RasterLayer(name: "组内上方子层", transform: .init(size: size), parentID: group.id)
+        // The storage array deliberately interleaves groups, siblings and later descendants.
+        let original = CanvasDocument(width: 32, height: 24,
+            layers: [outer, group, higher, rootHigher, nested, leaf, lastChild], activeLayerID: group.id)
+        let editor = try DocumentEditor(document: original)
+        let duplicate = try editor.duplicateLayer(group.id)
+        let copiedGroup = try XCTUnwrap(editor.document.layers.first { $0.id == duplicate })
+        let copiedNested = try XCTUnwrap(editor.document.layers.first { $0.parentID == duplicate && $0.isGroup })
+        let copiedLeaf = try XCTUnwrap(editor.document.layers.first { $0.parentID == copiedNested.id })
+        let copiedLast = try XCTUnwrap(editor.document.layers.first { $0.parentID == duplicate && !$0.isGroup })
+        XCTAssertEqual(editor.document.layers.filter { $0.parentID == outer.id }.map(\.id), [group.id, duplicate, higher.id])
+        XCTAssertEqual(editor.document.layers.filter { $0.parentID == nil }.map(\.id), [outer.id, rootHigher.id])
+        XCTAssertEqual(editor.document.hierarchy.map { $0.layer.id },
+            [outer.id, group.id, nested.id, leaf.id, lastChild.id, duplicate, copiedNested.id, copiedLeaf.id, copiedLast.id, higher.id, rootHigher.id])
+        XCTAssertEqual(Set(editor.document.layers.map(\.id)).count, original.layers.count + 4)
+        for layer in original.layers { XCTAssertEqual(editor.document.layers.first { $0.id == layer.id }, layer) }
+        XCTAssertTrue(copiedGroup.isLocked)
+        XCTAssertEqual(copiedGroup.opacity, group.opacity)
+        XCTAssertEqual(copiedNested.opacity, nested.opacity)
+        XCTAssertEqual(copiedLeaf.pngData, leaf.pngData)
+        XCTAssertEqual(copiedLeaf.transform, leaf.transform)
+        XCTAssertEqual(copiedLeaf.maskPNGData, leaf.maskPNGData)
+        XCTAssertEqual(copiedLeaf.maskEnabled, leaf.maskEnabled)
+        XCTAssertEqual(copiedLeaf.blendMode, leaf.blendMode)
+        XCTAssertEqual(copiedLeaf.opacity, leaf.opacity)
+        XCTAssertEqual(copiedLeaf.isVisible, leaf.isVisible)
+        XCTAssertTrue(copiedLeaf.isLocked)
+        XCTAssertNoThrow(try editor.document.validate())
+        try editor.setLocked(layerID: outer.id, isLocked: true)
+        let locked = editor.document
+        XCTAssertThrowsError(try editor.duplicateLayer(group.id)) { XCTAssertEqual($0 as? DocumentError, .lockedLayer) }
+        XCTAssertEqual(editor.document, locked)
+    }
+
     func testPackageRoundTripPreservesLayersTransformsMaskSelectionLocksAndRevision() throws {
         var document = try fixture()
         document.revision = 9_007_199_254_740_993 // More than a JSON/JavaScript float can exactly represent.

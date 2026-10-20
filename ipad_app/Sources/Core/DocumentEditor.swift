@@ -144,7 +144,9 @@ public final class DocumentEditor {
                         maskPNGData: layer.maskPNGData, maskEnabled: layer.maskEnabled)
         }
         try transaction("复制图层") { document in
-            let index = document.layers.lastIndex { ids.contains($0.id) }! + 1
+            // Sibling order follows each root record, not the last descendant's array
+            // position: children added later may sit beyond unrelated higher siblings.
+            let index = document.layers.firstIndex { $0.id == id }! + 1
             document.layers.insert(contentsOf: copies, at: index)
             document.activeLayerID = duplicateID
         }

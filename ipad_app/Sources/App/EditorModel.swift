@@ -258,20 +258,10 @@ final class EditorModel: ObservableObject {
     func rename(_ name: String) { if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { edit("重命名文稿") { $0.name = name } } }
     func resizeCanvas(width: Int, height: Int, resample: Bool) {
         report {
-            _ = try RasterImage.context(width: width, height: height)
-            edit(resample ? "图像大小" : "画布大小") { document in
-                if resample {
-                    let x = CGFloat(width) / CGFloat(document.width), y = CGFloat(height) / CGFloat(document.height)
-                    if abs(x - y) > 0.000001 && document.layers.contains(where: { abs($0.transform.rotation.truncatingRemainder(dividingBy: 180)) > 0.000001 }) {
-                        throw DocumentError.unsupported("旋转图层暂不支持非等比例图像缩放，请保持宽高比例")
-                    }
-                    for i in document.layers.indices {
-                        document.layers[i].transform.origin.x *= x; document.layers[i].transform.origin.y *= y
-                        document.layers[i].transform.size.width *= x; document.layers[i].transform.size.height *= y
-                    }
-                }
-                document.width = width; document.height = height; document.selectionMaskPNGData = nil
+            try editor.transaction(resample ? "图像大小" : "画布大小") { document in
+                try renderer.resizeCanvas(&document, width: width, height: height, resample: resample)
             }
+            renderer.clearCache(); changed()
             viewportReset += 1
         }
     }

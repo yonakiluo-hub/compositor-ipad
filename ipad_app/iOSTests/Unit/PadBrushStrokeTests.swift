@@ -100,4 +100,90 @@ final class PadBrushStrokeTests: XCTestCase {
         XCTAssertGreaterThan(try pixel(rotated.image(), x: 45, y: 32)[3], 200)
         XCTAssertEqual(try pixel(rotated.image(), x: 32, y: 45)[3], 0)
     }
+
+    func testExpandedCanvasAcceptsBrushInNewAreaAndUndoesResizeSeparately() throws {
+        let renderer = DocumentRenderer()
+        let originalRect = CGRect(x: 0, y: 0, width: 1200, height: 900)
+        func originalPixels(_ image: CGImage) throws -> Data {
+            let crop = try XCTUnwrap(image.cropping(to: originalRect))
+            let context = try RasterImage.context(width: 1200, height: 900)
+            RasterImage.draw(crop, in: originalRect, context: context)
+            return Data(bytes: try XCTUnwrap(context.data), count: context.bytesPerRow * context.height)
+        }
+
+        let initialStroke = try PadBrushStroke(width: 1200, height: 900, original: nil,
+            settings: settings(), selection: nil, maskMode: false)
+        initialStroke.add(sample(300, 450)); initialStroke.add(sample(600, 450))
+        let maskContext = try RasterImage.context(width: 1200, height: 900, gray: true)
+        maskContext.setFillColor(gray: 1, alpha: 1); maskContext.fill(originalRect)
+        maskContext.setFillColor(gray: 0, alpha: 1)
+        maskContext.fill(CGRect(x: 580, y: 430, width: 40, height: 40))
+        let layer = RasterLayer(name: "已有笔迹", pngData: try RasterImage.png(initialStroke.image()),
+            transform: .init(size: originalRect.size),
+            maskPNGData: try RasterImage.png(XCTUnwrap(maskContext.makeImage())))
+        let original = CanvasDocument(width: 1200, height: 900, layers: [layer], activeLayerID: layer.id)
+        let originalRenderedPixels = try originalPixels(renderer.render(original))
+        let originalLayerPixels = try originalPixels(XCTUnwrap(renderer.image(for: layer)))
+        let editor = try DocumentEditor(document: original)
+
+        try editor.transaction("画布大小") { document in
+            try renderer.resizeCanvas(&document, width: 1800, height: 900, resample: false)
+        }
+        renderer.clearCache()
+        let resized = editor.document
+        let expandedLayer = try XCTUnwrap(resized.layers.first)
+        let expandedMask = try RasterImage.decode(XCTUnwrap(expandedLayer.maskPNGData))
+        XCTAssertEqual(resized.size, CGSize(width: 1800, height: 900))
+        XCTAssertEqual(expandedMask.width, 1800)
+        XCTAssertEqual(try pixel(expandedMask, x: 600, y: 450), [0])
+        XCTAssertEqual(try pixel(expandedMask, x: 1500, y: 450), [255])
+        XCTAssertEqual(try originalPixels(XCTUnwrap(renderer.image(for: expandedLayer))), originalLayerPixels,
+                       "Canvas growth must preserve even pixels hidden by the layer mask")
+        XCTAssertEqual(try originalPixels(renderer.render(resized)), originalRenderedPixels)
+        XCTAssertEqual(try pixel(renderer.render(resized), x: 1500, y: 450)[3], 0)
+        XCTAssertEqual(editor.undoCount, 1)
+
+        // Match CanvasView: both the stroke buffer and touch conversion use the layer's
+        // current pixel size and transform, rather than the document size directly.
+        let size = try renderer.pixelSize(of: expandedLayer)
+        let documentToPixels = renderer.pixelToDocument(expandedLayer, size: size).inverted()
+        let stroke = try PadBrushStroke(width: Int(size.width), height: Int(size.height),
+            original: renderer.image(for: expandedLayer), settings: settings(),
+            selection: renderer.localSelection(nil, layer: expandedLayer, document: resized),
+            maskMode: false, brushToPixels: documentToPixels)
+        let point = CGPoint(x: 1500, y: 450).applying(documentToPixels)
+        stroke.add(sample(point.x, point.y))
+        let paintedPNG = try RasterImage.png(stroke.image())
+        try editor.transaction("绘画") { document in
+            let index = try XCTUnwrap(document.layers.firstIndex { $0.id == layer.id })
+            document.layers[index].pngData = paintedPNG
+        }
+        let painted = editor.document
+        let result = try renderer.render(painted)
+        XCTAssertEqual(try pixel(result, x: 1500, y: 450), [255, 0, 0, 255])
+        XCTAssertEqual(try pixel(result, x: 600, y: 450)[3], 0)
+        XCTAssertEqual(try originalPixels(result), originalRenderedPixels)
+        XCTAssertEqual(try originalPixels(XCTUnwrap(renderer.image(for: painted.layers[0]))), originalLayerPixels)
+        XCTAssertEqual(painted.layers[0].maskPNGData, expandedLayer.maskPNGData)
+        XCTAssertEqual(editor.undoCount, 2)
+
+        try editor.undo()
+        XCTAssertEqual(editor.document.size, resized.size)
+        XCTAssertEqual(editor.document.layers, resized.layers)
+        XCTAssertEqual(try pixel(renderer.render(editor.document), x: 1500, y: 450)[3], 0)
+        try editor.undo()
+        XCTAssertEqual(editor.document.size, original.size)
+        XCTAssertEqual(editor.document.layers, original.layers)
+        XCTAssertEqual(try originalPixels(renderer.render(editor.document)), originalRenderedPixels)
+        try editor.redo()
+        XCTAssertEqual(editor.document.size, resized.size)
+        XCTAssertEqual(editor.document.layers, resized.layers)
+        XCTAssertEqual(try pixel(renderer.render(editor.document), x: 1500, y: 450)[3], 0)
+        try editor.redo()
+        XCTAssertEqual(editor.document.size, painted.size)
+        XCTAssertEqual(editor.document.layers, painted.layers)
+        XCTAssertEqual(editor.document.activeLayerID, layer.id)
+        XCTAssertEqual(try pixel(renderer.render(editor.document), x: 1500, y: 450), [255, 0, 0, 255])
+        XCTAssertEqual(try originalPixels(renderer.render(editor.document)), originalRenderedPixels)
+    }
 }

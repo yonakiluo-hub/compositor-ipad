@@ -52,7 +52,7 @@ final class BridgeTests: XCTestCase {
         let originalBytes = Data("original immutable archive".utf8)
         _ = try await store.prepareSnapshot(documentID: "document", revision: Int64.max, archive: originalBytes, pairing: pairing())
         let reopened = try BridgeSubmissionStore(directory: directory)
-        let restored = try await reopened.loadSnapshot(documentID: "document", revision: Int64.max)
+        let restored = try await reopened.loadSnapshot(documentID: "document", revision: Int64.max, pairing: pairing())
         XCTAssertEqual(restored?.archive, originalBytes)
         do {
             _ = try await reopened.prepareSnapshot(documentID: "document", revision: Int64.max, archive: Data("changed archive".utf8), pairing: pairing())
@@ -60,6 +60,48 @@ final class BridgeTests: XCTestCase {
         } catch { XCTAssertEqual(error as? BridgeError, .submissionConflict) }
         let submissions = try await reopened.list()
         XCTAssertTrue(submissions.isEmpty, "Snapshots must not be interpreted as image jobs")
+    }
+
+    func testSnapshotPairingSwitchReusesFrozenBytesAcrossRestartAndLegacyCache() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let archive = SnapshotSwitchProtocol.archive
+        let mock = try BridgePairing(baseUrl: "https://mock-backup.test", accessToken: "local-test", backend: "mock")
+        let windows = try BridgePairing(baseUrl: "https://windows-backup.test", accessToken: "local-test", backend: "comfyui")
+        let movedWindows = try BridgePairing(baseUrl: "https://moved-backup.test", accessToken: "local-test", backend: "comfyui")
+        let store = try BridgeSubmissionStore(directory: directory)
+        let original = try await store.prepareSnapshot(documentID: "document", revision: 17, archive: archive, pairing: mock)
+
+        // Existing installations have destination fields in their old manifest. Migration
+        // must preserve their exact ZIP, even when a different server is selected after restart.
+        let folder = directory.appendingPathComponent(".snapshots/document/17")
+        let legacy: [String: Any] = ["documentID": "document", "revision": 17, "origin": mock.origin,
+                                   "backend": mock.backend, "sha256": bridgeSHA256(archive)]
+        try JSONSerialization.data(withJSONObject: legacy).write(to: folder.appendingPathComponent("snapshot.json"))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [SnapshotSwitchProtocol.self]
+        let windowsClient = try BridgeClient(pairing: windows, configuration: configuration)
+        do { _ = try await windowsClient.uploadSnapshot(original); XCTFail("Old upload must remain bound to its selected server") }
+        catch { XCTAssertEqual(error as? BridgeError, .wrongServer) }
+
+        for destination in [windows, movedWindows, mock] {
+            let reopened = try BridgeSubmissionStore(directory: directory)
+            let loaded = try await reopened.loadSnapshot(documentID: "document", revision: 17, pairing: destination)
+            let upload = try XCTUnwrap(loaded)
+            XCTAssertEqual(upload.archive, archive)
+            XCTAssertEqual(upload.origin, destination.origin)
+            XCTAssertEqual(upload.backend, destination.backend)
+            let client = try BridgeClient(pairing: destination, configuration: configuration)
+            let receipt = try await client.uploadSnapshot(upload)
+            let retry = try await reopened.prepareSnapshot(documentID: "document", revision: 17, archive: archive, pairing: destination)
+            let retryReceipt = try await client.uploadSnapshot(retry)
+            XCTAssertEqual(receipt, retryReceipt)
+            do {
+                _ = try await reopened.prepareSnapshot(documentID: "document", revision: 17, archive: Data("repacked bytes".utf8), pairing: destination)
+                XCTFail("Changing destination must not permit new bytes for an existing revision")
+            } catch { XCTAssertEqual(error as? BridgeError, .submissionConflict) }
+            XCTAssertEqual(try Data(contentsOf: folder.appendingPathComponent("project.comp.zip")), archive)
+        }
     }
 
     func testPNGMaskAndMultipartConventions() throws {
@@ -221,7 +263,7 @@ final class BridgeTests: XCTestCase {
         let upload = try await store.prepareSnapshot(documentID: documentID, revision: revision, archive: archive, pairing: pairing)
         let first = try await client.uploadSnapshot(upload)
         let reopened = try BridgeSubmissionStore(directory: directory)
-        let loaded = try await reopened.loadSnapshot(documentID: documentID, revision: revision)
+        let loaded = try await reopened.loadSnapshot(documentID: documentID, revision: revision, pairing: pairing)
         let retry = try await client.uploadSnapshot(XCTUnwrap(loaded))
         XCTAssertEqual(first, retry)
         XCTAssertEqual(first.revision, revision)
@@ -266,6 +308,28 @@ private final class BridgeTestProtocol: URLProtocol {
             """.utf8)
         } else { body = Data(#"{"ok":false,"backend":"mock","isSimulation":true,"missingNodes":["RequiredNode"]}"#.utf8) }
         let response = HTTPURLResponse(url: request.url!, statusCode: unauthorized ? 401 : 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { }
+}
+
+/// No network or inference: stand-in backup endpoints verify a destination-bound upload can
+/// reach each newly selected service and receive the same immutable archive checksum.
+private final class SnapshotSwitchProtocol: URLProtocol {
+    static let archive = Data("frozen snapshot version 17".utf8)
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let allowed = ["mock-backup.test", "windows-backup.test", "moved-backup.test"]
+        let valid = allowed.contains(request.url?.host ?? "") && request.url?.path == "/v1/documents/document/snapshots/17"
+            && request.httpMethod == "POST" && request.value(forHTTPHeaderField: "Authorization") == "Bearer local-test"
+            && (Int(request.value(forHTTPHeaderField: "Content-Length") ?? "") ?? 0) > Self.archive.count
+        let metadata: [String: Any] = ["documentId": "document", "revision": 17, "sha256": bridgeSHA256(Self.archive),
+                                       "bytes": Self.archive.count, "createdAt": "2026-10-20T00:00:00Z", "projectVersion": 14]
+        let body = try! JSONSerialization.data(withJSONObject: metadata)
+        let response = HTTPURLResponse(url: request.url!, statusCode: valid ? 200 : 400, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)

@@ -73,7 +73,7 @@ extension EditorModel {
         networkBusy = true; defer { networkBusy = false }
         backupStatus = "正在准备版本 \(snapshot.revision) 的备份…"
         do {
-            let existing = try await taskStore.loadSnapshot(documentID: id, revision: snapshot.revision)
+            let existing = try await taskStore.loadSnapshot(documentID: id, revision: snapshot.revision, pairing: pairing)
             let upload: BridgeSnapshotUpload
             if let existing { upload = existing }
             else {
