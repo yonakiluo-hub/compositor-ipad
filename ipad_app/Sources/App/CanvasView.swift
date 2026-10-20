@@ -156,8 +156,13 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             } }
         }
         var image = model.preview
-        if model.transformSession != nil {
-            image = try? model.renderer.render(model.transformPreviewDocument)
+        if let session = model.transformSession {
+            if let replacement = model.transformPreviewReplacement {
+                image = try? model.renderer.render(model.transformPreviewDocument, replacing: session.layerID,
+                    with: replacement.image, replacementMask: replacement.mask)
+            } else {
+                image = try? model.renderer.render(model.transformPreviewDocument)
+            }
         } else if let strokeLayer, let strokeImage, !gestureTool.isSelection {
             image = try? model.renderer.render(model.document, replacing: strokeLayer.id, with: strokeImage)
         } else if let layer = strokeLayer, gestureTool == .move, startPoint != nil {
@@ -169,7 +174,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             }
         }
         if let image { RasterImage.draw(image, in: canvas, context: context) }
-        let selection = gestureTool.isSelection && strokeImage != nil ? strokeImage : model.selectionPreview
+        let selection = gestureTool.isSelection && strokeImage != nil ? strokeImage : model.displayedSelectionPreview
         if let selection {
             context.saveGState(); RasterImage.clip(selection, to: canvas, context: context)
             context.setFillColor(UIColor.systemTeal.withAlphaComponent(0.28).cgColor); context.fill(canvas); context.restoreGState()

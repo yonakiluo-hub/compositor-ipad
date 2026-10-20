@@ -171,6 +171,8 @@ struct EditorView: View {
                     .accessibilityIdentifier("transform.commit")
             }
             if let session = model.transformSession {
+                Text(session.scope == .selection ? "变换选中内容 · 选区随动 · 图层蒙版保持原位" : "变换整个图层 · 蒙版随动")
+                    .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("transform.scope")
                 Text(String(format: "宽 %.1f · 高 %.1f px · 旋转 %.1f°　预览中，完成后保存",
                             Double(session.current.size.width), Double(session.current.size.height), Double(session.current.rotation)))
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)

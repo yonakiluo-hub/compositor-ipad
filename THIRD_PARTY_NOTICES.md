@@ -23,6 +23,7 @@ The iPad editor includes and adapts code from [Compositor-ZH](https://github.com
 - `ipad_app/Sources/Rendering/CanvasViewport.swift`: viewport geometry and anchored zoom; rotation-aware mapping and anchored view rotation are iPad additions.
 - `ipad_app/Sources/Core/LayerGeometry.swift`: layer transforms and pass-through hierarchy semantics.
 - `ipad_app/Sources/Core/FreeTransform.swift`: fixed-anchor resizing and angle-delta rotation adapted from `Document/LayerTransform.swift` (`TransformDrag`); finite-value guards and non-flipping minimum sizes are iPad adaptations.
+- `ipad_app/Sources/Rendering/SelectionTransform.swift`: selected-pixel lift, affine placement and transactional merge adapted from `Document/FloatingSelection.swift`, `SelectionClipboard.swift` and `BrushStroke.swift`. Numeric gray-mask transport, stationary independent layer masks and coverage-aware premultiplied overlap composition are iPad adaptations; they prevent soft selections from fading when the moved content overlaps its original position.
 - `ipad_app/Sources/App/TransformOverlay.swift`: transform handle geometry adapted from `Rendering/TransformOverlay.swift`, with touch-sized targets and rotated-viewport mapping.
 - `ipad_app/Sources/Rendering/RasterImage.swift`: normalized Gaussian brush falloff adapted from `BrushRaster.falloff`.
 - `ipad_app/Sources/Rendering/SelectionMask.swift`: path rasterization and Gaussian feather radius/edge conventions adapted from `Document/Selection.swift`; raster coverage combination and intersection are iPad additions.
