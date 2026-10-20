@@ -61,6 +61,7 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
   "snapshotFormat": "comp-zip",
   "progressTransport": "polling",
   "cancelSupported": false,
+  "jobDeletionSupported": true,
   "pairingScope": "single-owner-installation",
   "resultAlphaMode": "straight"
 }
@@ -127,6 +128,7 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
 | `GET /v1/jobs/{jobId}` | 查询单个持久任务 |
 | `GET /v1/jobs?documentId=…&limit=100` | 返回 `{"jobs": […]}`；新任务在前，`limit` 为 1–100；省略 documentId 查询全部。当前没有分页游标 |
 | `GET /v1/jobs/{jobId}/results/0` | 下载完成结果；未完成或结果不存在返回 404 |
+| `DELETE /v1/jobs/{jobId}` | 可选能力：删除已结束任务的桥接缓存；成功或重复删除均返回 200 |
 
 建议每 1–2 秒轮询；无 WebSocket、百分比进度或取消接口。状态为 `queued`、`running`、`succeeded`、`failed`。`running` 包括等待 ComfyUI 可用、提交与执行阶段，不意味着 GPU 此刻一定正在采样。
 
@@ -174,9 +176,29 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
 
 `maskApplied=true` 意味着灰度覆盖已经乘入结果 alpha。**不要再次乘同一蒙版，也不要把灰色覆盖重复套在图层上**，否则软边会变淡。黑蒙版位置输出 alpha 精确为零；灰蒙版按 `floor(generatedAlpha × mask / 255)` 处理。使用透明图层覆盖保留原稿，不用结果 RGB 直接替换整个裁切。
 
-客户端用 `(jobId,resultId)` 记录已插入图层，重复下载不能新增重复图层。检查 `source.documentId` 和版本；如果已经继续画、缩放画布或裁切原文档，保留候选并提示版本变化，不能直接自动回填旧坐标。插入走编辑器单个可撤销事务，不通过替换整个 `.comp` 工程触发重载。
+客户端用 `(jobId,resultId)` 记录已插入图层，重复下载不能新增重复图层。候选应用前检查 `source.documentId`、版本、原画布尺寸与裁切位置。文稿已经继续编辑时，默认保留候选并提示版本变化，不自动回填；用户预览后可明确确认按生成时的原位置加入独立新图层。该确认只放行旧版本，不放宽其他检查：候选必须属于当前文稿，源版本不得晚于当前版本，原画布尺寸必须与当前一致，裁切必须位于画布内；确认后又发生编辑时应重新确认。插入保留现有图层，走编辑器单个可撤销事务，不通过替换整个 `.comp` 工程触发重载。
 
 iPad 将 `clientRequestId`、`jobId` 和提交快照保存到本地。锁屏、断线或进程重开后查询原任务；Windows 继续执行并保存结果。桥接会从 ComfyUI 队列/历史恢复提交 ID，结果未知时不会自动再次提交。`submission_unknown`、`task_not_found` 或 `job_timeout` 失败不代表 GPU 一定从未执行；先核对 Windows 状态，再由用户决定是否新建请求。ComfyUI 自身重启或清空历史会限制恢复能力，不承诺严格“一次执行”。
+
+## 删除不需要的候选
+
+删除是 API v1 的可选扩展：仅在 `capabilities.jobDeletionSupported == true` 时调用；旧服务缺少此字段时视为不支持远端删除。此能力不改变 `cancelSupported=false`。删除按一次生成任务执行，包含其全部结果；当前预设通常每次返回一个结果。客户端可另行移除本机候选，但应说明旧服务仍保留远端文件。仅本机移除的候选可以重新显示并按需下载，前提是服务仍保留结果；这不能恢复已经远端删除的文件。
+
+认证后调用 `DELETE /v1/jobs/{jobId}`，无请求体。只允许删除 `succeeded` 或 `failed` 的任务，成功返回：
+
+```json
+{"jobId":"server-generated-uuid","deleted":true}
+```
+
+`queued`、`running` 返回 **409** `job_not_finished`，任务继续运行，不会被取消。未知任务返回 **404**。重复删除已删除的任务仍返回相同的 **200** 回执。
+
+删除清理桥接数据目录中该任务的输入图、蒙版、工作流与结果；已保存的 `.comp` 工程备份不受影响，已经回填进工程的图层也不受影响。ComfyUI 自己的 input/output 目录不在本接口的清理范围内，不能把此操作描述成清空所有生成占用。
+
+服务先持久记录最小删除标记，再清理文件。删除标记保留任务 ID、原 `clientRequestId`、请求摘要及必要的状态信息，不保留完整 metadata、提示词或图片。已删任务不会出现在任务列表或待执行队列中；查询任务、下载结果或以原 `clientRequestId` 再次提交均返回 **410** `job_deleted`，不能自动重新生成。用户主动生成新候选时使用新的 `clientRequestId`。
+
+文件被占用或清理失败时返回 **503** `job_deletion_incomplete`，此时删除标记可能已经生效，任务仍不会重新运行。客户端在发送用户确认的删除请求前持久保存待删除记录；再次 DELETE 或桥接服务重启会继续清理，只有收到与所选任务匹配的 200 回执才确认桥接文件已删除并完成本地清理。超时或 503 后保留重试入口，重开应用也不能丢掉该状态。后续 GET 的 410 只证明任务已不可用，不能代替清理完成回执。已删除文件无法从候选区恢复。
+
+Windows 升级保留原数据目录和配对配置，重启后通过 capability 确认此扩展可用。执行过删除的数据库含 `deleted` 墓碑；旧桥接版本不能正确读取这些记录，因此不宜直接回退旧服务代码并继续使用该数据库。不要手动删除墓碑来绕过兼容问题，否则原请求 ID 可能再次触发生成。升级操作见 [桥接 README](../README.md#升级候选删除能力)。
 
 ## 工程版本备份
 
@@ -205,11 +227,12 @@ HTTP 错误统一形如 `{"error":{"code":"…","message":"…"}}`；字段验�
 | 400 | `invalid_framing`：重复 Content-Length 或 Transfer-Encoding |
 | 401 | `unauthorized`：配对凭据缺失或错误 |
 | 404 | 任务、结果或快照不存在 |
-| 409 | 相同请求 ID／工程版本对应不同内容 |
+| 409 | 相同请求 ID／工程版本对应不同内容；`job_not_finished`：任务尚未结束，不能删除 |
+| 410 | `job_deleted`：任务已删除，不能以原请求 ID 重新生成 |
 | 411 | `length_required`：没有合法 Content-Length |
 | 413 | 请求或单个文件过大 |
 | 422 | metadata、图像、蒙版或归档无效 |
-| 503 | worker 不可用或 ComfyUI 暂不可达 |
+| 503 | worker 不可用、ComfyUI 暂不可达，或 `job_deletion_incomplete`：文件清理需重试 |
 
 创建成功后发生的生成失败记录在 job 的 `error` 中，`GET /v1/jobs/{id}` 仍返回 200。客户端分别处理 HTTP 失败和任务状态失败，避免永久转圈。
 

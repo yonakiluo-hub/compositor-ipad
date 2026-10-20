@@ -177,13 +177,18 @@ public final class DocumentEditor {
         try transaction("移动图层") { $0.layers[index].parentID = parentID }
     }
 
+    /// A changed revision requires an explicit user choice to insert at the original
+    /// coordinates. The candidate still belongs to the original document and canvas;
+    /// consent never changes its anchor or permits replacing existing layers.
     @discardableResult
     public func insertAIResult(pngData: Data, key: AIResultKey, anchor: GenerationAnchor,
-                               name: String = "AI 候选") throws -> UUID {
+                               name: String = "AI 候选", allowChangedRevision: Bool = false) throws -> UUID {
         guard anchor.documentID == document.id else { throw DocumentError.wrongDocument }
         guard !document.appliedAIResults.contains(key) else { throw DocumentError.duplicateResult }
         guard anchor.canvasWidth == document.width, anchor.canvasHeight == document.height else { throw DocumentError.changedCanvas }
-        guard anchor.baseRevision == document.revision else { throw DocumentError.staleRevision }
+        guard anchor.baseRevision >= 0, anchor.baseRevision <= document.revision,
+              anchor.baseRevision == document.revision || allowChangedRevision
+        else { throw DocumentError.staleRevision }
         guard anchor.cropRect.isInside(width: document.width, height: document.height) else { throw DocumentError.invalid("候选裁切区域越界") }
         let size = try PNGAsset.inspect(pngData, requireRGBA: true)
         guard size.width == anchor.cropRect.width, size.height == anchor.cropRect.height

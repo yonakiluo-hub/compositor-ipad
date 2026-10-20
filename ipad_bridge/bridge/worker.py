@@ -39,8 +39,9 @@ class Worker:
     async def process(self, job_id: str):
         from .images import make_result, mock_generate
 
-        record = self.store.get(job_id)
-        self.store.update(job_id, state="running")
+        record = self.store.claim(job_id)
+        if record is None:
+            return
         folder = self.store.job_dir(job_id)
         mask = (folder / "mask.png").read_bytes()
         if self.settings.backend == "mock":

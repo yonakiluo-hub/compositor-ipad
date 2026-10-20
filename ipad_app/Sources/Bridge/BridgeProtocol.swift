@@ -4,7 +4,7 @@ import CryptoKit
 public enum BridgeError: Error, LocalizedError, Equatable {
     case invalidPairing(String), invalidInput(String), incompatibleServer(String)
     case http(Int, String, String), invalidResponse(String), integrityFailure
-    case submissionConflict, wrongServer, storageCorrupted
+    case submissionConflict, wrongServer, storageCorrupted, jobRemoved
 
     public var errorDescription: String? {
         switch self {
@@ -17,6 +17,7 @@ public enum BridgeError: Error, LocalizedError, Equatable {
         case .submissionConflict: return "请求已存在且内容不同；重试必须使用原始文件。"
         case .wrongServer: return "此任务属于另一台桥接服务，请恢复原配对后继续。"
         case .storageCorrupted: return "本地任务快照损坏，已停止重试以保护原请求。"
+        case .jobRemoved: return "此生成任务已移除；需要再次生成时请创建新任务。"
         }
     }
 }
@@ -108,6 +109,33 @@ public struct BridgeCapabilities: Codable, Equatable, Sendable {
     public let cancelSupported: Bool
     public let pairingScope: String
     public let resultAlphaMode: String
+    /// Optional API v1 extension. Older bridges remain usable without server deletion.
+    public let jobDeletionSupported: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case protocolVersion, backend, isSimulation, presets, maxInputPixels, maxImageBytes,
+             minInputSide, maxInputAspectRatio, maxSnapshotBytes, snapshotFormat,
+             progressTransport, cancelSupported, pairingScope, resultAlphaMode, jobDeletionSupported
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try c.decode(Int.self, forKey: .protocolVersion)
+        backend = try c.decode(String.self, forKey: .backend)
+        isSimulation = try c.decode(Bool.self, forKey: .isSimulation)
+        presets = try c.decode([BridgePreset].self, forKey: .presets)
+        maxInputPixels = try c.decode(Int.self, forKey: .maxInputPixels)
+        maxImageBytes = try c.decode(Int.self, forKey: .maxImageBytes)
+        minInputSide = try c.decode(Int.self, forKey: .minInputSide)
+        maxInputAspectRatio = try c.decodeIfPresent(Int.self, forKey: .maxInputAspectRatio)
+        maxSnapshotBytes = try c.decode(Int.self, forKey: .maxSnapshotBytes)
+        snapshotFormat = try c.decode(String.self, forKey: .snapshotFormat)
+        progressTransport = try c.decode(String.self, forKey: .progressTransport)
+        cancelSupported = try c.decode(Bool.self, forKey: .cancelSupported)
+        pairingScope = try c.decode(String.self, forKey: .pairingScope)
+        resultAlphaMode = try c.decode(String.self, forKey: .resultAlphaMode)
+        jobDeletionSupported = try c.decodeIfPresent(Bool.self, forKey: .jobDeletionSupported) ?? false
+    }
 }
 public struct BridgeBackendStatus: Decodable, Sendable {
     public let ok: Bool
@@ -215,6 +243,14 @@ public struct BridgeJob: Codable, Equatable, Sendable {
     public let workflowPreset: String
     public let error: BridgeServiceError?
     public let results: [BridgeResult]
+}
+
+/// Created only after a matching authenticated deletion acknowledgement. The server
+/// origin is carried locally so a pairing switch cannot clear another server's files.
+public struct BridgeJobDeletion: Equatable, Sendable {
+    public let jobID: String
+    public let origin: String
+    public let backend: String
 }
 public struct BridgeSnapshot: Codable, Equatable, Sendable {
     public let documentId: String

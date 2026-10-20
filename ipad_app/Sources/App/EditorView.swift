@@ -18,6 +18,8 @@ struct EditorView: View {
     @State private var editingOpacity = false
     @State private var draftOpacity = 1.0
     @State private var showRename = false
+    @State private var candidateInsertion: CandidateInsertion?
+    @State private var candidateRemoval: CandidateRemoval?
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
@@ -58,6 +60,28 @@ struct EditorView: View {
         .alert("文稿名称", isPresented: $showRename) {
             TextField("名称", text: $documentName)
             Button("保存") { model.rename(documentName) }; Button("取消", role: .cancel) {}
+        }
+        .alert("使用旧版候选？", isPresented: Binding(get: { candidateInsertion != nil }, set: { if !$0 { candidateInsertion = nil } }), presenting: candidateInsertion) { choice in
+            Button("按原位置加入新图层") {
+                model.applyCandidate(choice.job, choice.result, sourcePairing: choice.pairing,
+                    allowChangedRevision: true, confirmedRevision: choice.revision)
+                candidateInsertion = nil
+            }
+            Button("取消", role: .cancel) { candidateInsertion = nil }
+        } message: { choice in
+            Text("这张候选来自版本 \(choice.job.source.baseRevision)，当前为版本 \(choice.revision)。它会按生成时的位置加入独立新图层，已有图层保留。请确认预览仍适合当前画面。")
+        }
+        .alert(candidateRemoval?.fromServer == true ? "删除这次生成？" : "从本机移除这次生成？",
+               isPresented: Binding(get: { candidateRemoval != nil }, set: { if !$0 { candidateRemoval = nil } }), presenting: candidateRemoval) { choice in
+            Button(choice.fromServer ? "删除候选" : "从本机移除", role: .destructive) {
+                candidateRemoval = nil
+                Task { await model.removeCandidateJob(choice.job, sourcePairing: choice.pairing, fromServer: choice.fromServer) }
+            }
+            Button("取消", role: .cancel) { candidateRemoval = nil }
+        } message: { choice in
+            Text(choice.fromServer
+                ? "清除这次生成的候选及本机、Windows 桥接缓存，删除后不能找回。已加入文稿的图层和工程备份保留。ComfyUI 自身的输入、输出文件需单独管理。"
+                : "清理这次生成的本机输入和预览缓存，以后刷新不会再显示。已加入文稿的图层、工程备份和 Windows 文件保留。")
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: importKind == 2 ? [.json] : importKind == 1 ? [UTType(importedAs: "com.compositor.project"), .folder] : [.png, .jpeg, .heic, .tiff], allowsMultipleSelection: false) { result in
             switch result {
@@ -214,7 +238,7 @@ struct EditorView: View {
     }
     private var aiPanel: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            LazyVStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Circle().fill(model.capabilities == nil ? Color.gray : Color.accentColor).frame(width: 7, height: 7)
                     Text(model.pairing == nil ? "尚未连接" : model.pairing?.backend == "mock" ? "模拟服务 · 不执行 AI" : "Windows · ComfyUI").font(.caption.bold())
@@ -242,6 +266,20 @@ struct EditorView: View {
                         Button("重试未确认请求 \(id.prefix(6))") { Task { await model.retryPending(id) } }.font(.caption).disabled(model.networkBusy || model.taskStore == nil)
                     }
                     Divider()
+                    HStack {
+                        Text("候选管理").font(.subheadline.bold())
+                        Spacer()
+                        Text("\(model.jobs.count) 次生成").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("最新候选自动预览，较早候选可点按加载；删除候选不会删除已加入工程的图层。").font(.caption).foregroundStyle(.secondary)
+                    if model.capabilities?.jobDeletionSupported != true {
+                        Text(model.capabilities == nil ? "检查连接后可确认 Windows 是否支持删除。" : "当前 Windows 服务未支持删除；本机移除不会释放 Windows 空间，请更新桥接服务。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !model.candidateManagementStatus.isEmpty { Text(model.candidateManagementStatus).font(.caption).foregroundStyle(.secondary) }
+                    if !model.locallyRemovedJobIDs.isEmpty {
+                        Button("重新显示本机已移除项") { Task { await model.restoreLocallyRemovedCandidates() } }.font(.caption)
+                    }
                     ForEach(model.jobs, id: \.jobId) { job in jobCard(job) }
                     Button("断开配对", role: .destructive) { model.disconnect() }.font(.caption)
                 }
@@ -251,18 +289,61 @@ struct EditorView: View {
     private func jobCard(_ job: BridgeJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack { Text(job.isSimulation ? "模拟候选" : "生成候选").font(.subheadline.bold()); Spacer(); Text(stateName(job.state)).font(.caption) }
+            if model.pendingDeletionJobIDs.contains(job.jobId) {
+                Text("删除尚未完成，恢复任务或再次删除可继续清理。").font(.caption).foregroundStyle(.secondary)
+            } else if model.unavailableJobIDs.contains(job.jobId) {
+                Text("服务端已移除，文件清理尚未确认。").font(.caption).foregroundStyle(.secondary)
+            }
             if let error = job.error { Text("\(error.code)：\(error.message)").font(.caption).foregroundStyle(.red) }
             ForEach(job.results, id: \.resultId) { result in
+                let key = model.candidateKey(job, result)
                 if let data = model.candidates[model.candidateKey(job, result)], let image = UIImage(data: data) {
                     Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 180).background(.white.opacity(0.12)).clipShape(RoundedRectangle(cornerRadius: 8))
                     let applied = model.document.appliedAIResults.contains(AIResultKey(jobID: job.jobId, resultID: result.resultId))
                     let stale = job.source.baseRevision != model.document.revision
-                    Button(applied ? "已加入图层" : stale ? "文稿已改变 · 保留候选" : "加入新图层") { model.applyCandidate(job, result) }
-                        .buttonStyle(.bordered).disabled(applied || stale).font(.caption)
+                    let problem = model.candidatePlacementProblem(job, result)
+                    Button(applied ? "已加入图层" : stale ? "使用旧版候选…" : "加入新图层") {
+                        guard let pairing = model.pairing else { return }
+                        if stale { candidateInsertion = CandidateInsertion(job: job, result: result, pairing: pairing, revision: model.document.revision) }
+                        else { model.applyCandidate(job, result, sourcePairing: pairing) }
+                    }
+                    .buttonStyle(.bordered).disabled(applied || problem != nil || model.removingJobIDs.contains(job.jobId) || model.pendingDeletionJobIDs.contains(job.jobId)).font(.caption)
+                    .accessibilityIdentifier("candidate.apply.\(key)")
+                    if let problem, !applied { Text(problem).font(.caption).foregroundStyle(.secondary) }
+                } else {
+                    Button {
+                        Task { await model.loadCandidate(job, result) }
+                    } label: {
+                        HStack { if model.loadingCandidateKeys.contains(key) { ProgressView() }; Text("加载候选预览") }
+                    }.font(.caption).disabled(model.loadingCandidateKeys.contains(key) || model.removingJobIDs.contains(job.jobId) || model.unavailableJobIDs.contains(job.jobId) || model.pendingDeletionJobIDs.contains(job.jobId))
+                    .accessibilityIdentifier("candidate.load.\(key)")
                 }
+            }
+            if job.state == .succeeded || job.state == .failed {
+                Menu {
+                    if let pairing = model.pairing {
+                        if model.capabilities?.jobDeletionSupported == true {
+                            Button("删除本机及 Windows 候选", role: .destructive) { candidateRemoval = CandidateRemoval(job: job, pairing: pairing, fromServer: true) }
+                        }
+                        Button("仅从本机移除", role: .destructive) { candidateRemoval = CandidateRemoval(job: job, pairing: pairing, fromServer: false) }
+                    }
+                } label: { Label(model.removingJobIDs.contains(job.jobId) ? "正在清理…" : "管理这次生成", systemImage: "trash") }
+                .font(.caption).disabled(model.networkBusy || model.removingJobIDs.contains(job.jobId))
+                .accessibilityIdentifier("candidate.manage.\(job.jobId)")
             }
             Text("源版本 \(job.source.baseRevision) · \(job.jobId.prefix(8))").font(.system(size: 10)).foregroundStyle(.secondary)
         }.padding(12).background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+    }
+    private struct CandidateInsertion {
+        let job: BridgeJob
+        let result: BridgeResult
+        let pairing: BridgePairing
+        let revision: Int64
+    }
+    private struct CandidateRemoval {
+        let job: BridgeJob
+        let pairing: BridgePairing
+        let fromServer: Bool
     }
     private var libraryView: some View {
         NavigationStack {

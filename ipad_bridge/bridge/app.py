@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 
 from . import __version__
 from .config import Settings
-from .store import RequestConflict, Store, public_job
+from .store import JobDeleted, JobNotFinished, RequestConflict, Store, public_job
 from .worker import Worker
 
 MAX_REQUEST_BYTES = 66 * 1024 * 1024
@@ -101,6 +101,7 @@ def create_app(settings: Settings) -> FastAPI:
         backend = None
         task = None
         try:
+            await asyncio.to_thread(store.cleanup_deleted)
             if settings.backend == "comfyui":
                 from .comfy import ComfyBackend
                 backend = ComfyBackend(settings.comfy_url, Path(__file__).parent / "presets")
@@ -138,6 +139,11 @@ def create_app(settings: Settings) -> FastAPI:
         return JSONResponse({"error": {"code": "invalid_request", "message": "Required request fields are missing or invalid.",
                                       "details": [{"field": list(item["loc"]), "message": item["msg"]} for item in exc.errors()]}}, status_code=422)
 
+    @app.exception_handler(JobDeleted)
+    async def deleted_job(request, exc):
+        return JSONResponse({"error": {"code": "job_deleted", "message": str(exc)}}, status_code=410,
+                            headers={"Cache-Control": "private, no-store"})
+
     def worker_available():
         task = getattr(app.state, "worker_task", None)
         return not settings.start_worker or (task is not None and not task.done())
@@ -174,6 +180,7 @@ def create_app(settings: Settings) -> FastAPI:
             "maxInputAspectRatio": None if settings.backend == "mock" else 16,
             "maxSnapshotBytes": 64 * 1024 * 1024, "snapshotFormat": "comp-zip",
             "progressTransport": "polling", "cancelSupported": False,
+            "jobDeletionSupported": True,
             "pairingScope": "single-owner-installation", "resultAlphaMode": "straight",
         }
 
@@ -222,6 +229,19 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/v1/jobs/{job_id}", dependencies=[Depends(authenticated)])
     async def get_job(job_id: str):
         return public_job(lookup(job_id))
+
+    @app.delete("/v1/jobs/{job_id}", dependencies=[Depends(authenticated)])
+    async def delete_job(job_id: str):
+        try:
+            await asyncio.to_thread(store.delete, job_id)
+        except KeyError:
+            raise HTTPException(404, "Job not found") from None
+        except JobNotFinished as exc:
+            raise HTTPException(409, detail={"code": "job_not_finished", "message": str(exc)}) from None
+        except (OSError, ValueError):
+            raise HTTPException(503, detail={"code": "job_deletion_incomplete",
+                "message": "The task is unavailable, but some stored files could not be removed. Retry deletion."}) from None
+        return {"jobId": job_id, "deleted": True}
 
     @app.get("/v1/jobs/{job_id}/results/{result_id}", dependencies=[Depends(authenticated)])
     async def get_result(job_id: str, result_id: str):

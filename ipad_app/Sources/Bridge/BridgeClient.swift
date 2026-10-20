@@ -100,6 +100,34 @@ public actor BridgeClient {
         return response.jobs
     }
 
+    /// Only an explicitly selected, finished job can be deleted. Pass the pairing
+    /// that supplied the candidate, even if the UI has since selected another server.
+    public func deleteJob(_ job: BridgeJob, pairing sourcePairing: BridgePairing) async throws -> BridgeJobDeletion {
+        try sourcePairing.validate()
+        guard sourcePairing.origin == pairing.origin, sourcePairing.backend == pairing.backend else { throw BridgeError.wrongServer }
+        try requireID(job.jobId)
+        try validateBackend(job)
+        guard job.state == .succeeded || job.state == .failed else { throw BridgeError.invalidInput("生成尚未结束，暂不能删除") }
+        // Deletion must also work while the GPU backend is unavailable. Do not call
+        // preflight(), which additionally requires a ready inference backend.
+        let capabilities: BridgeCapabilities = try await get("/v1/capabilities")
+        guard capabilities.protocolVersion == 1, capabilities.backend == pairing.backend,
+              capabilities.isSimulation == (pairing.backend == "mock"), capabilities.jobDeletionSupported else {
+            throw BridgeError.incompatibleServer("此服务尚不支持删除生成任务，可仅从本机移除")
+        }
+        var request = try request("/v1/jobs/\(job.jobId)")
+        request.httpMethod = "DELETE"
+        let (data, response) = try await session.data(for: request)
+        try checkHTTP(response, data: data)
+        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 65536 else {
+            throw BridgeError.invalidResponse("删除回执状态或大小无效")
+        }
+        struct Receipt: Decodable { let jobId: String; let deleted: Bool }
+        let receipt = try JSONDecoder().decode(Receipt.self, from: data)
+        guard receipt.jobId == job.jobId, receipt.deleted else { throw BridgeError.invalidResponse("删除回执与所选任务不一致") }
+        return BridgeJobDeletion(jobID: job.jobId, origin: pairing.origin, backend: pairing.backend)
+    }
+
     public func download(result: BridgeResult, job: BridgeJob) async throws -> Data {
         try validateBackend(job)
         try requireID(job.jobId); try requireID(result.resultId)

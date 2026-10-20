@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import shutil
 import sqlite3
 import threading
 import uuid
@@ -15,6 +17,14 @@ def utc_now() -> str:
 
 
 class RequestConflict(ValueError):
+    pass
+
+
+class JobDeleted(Exception):
+    pass
+
+
+class JobNotFinished(Exception):
     pass
 
 
@@ -77,6 +87,8 @@ class Store:
             db.execute("BEGIN IMMEDIATE")
             previous = self.decode(db.execute("SELECT * FROM jobs WHERE client_request_id=?", (metadata["clientRequestId"],)).fetchone())
             if previous:
+                if previous["state"] == "deleted":
+                    raise JobDeleted("This task was deleted. Start a new request to generate again.")
                 if previous["request_hash"] != request_hash:
                     raise RequestConflict("The request ID already belongs to different content")
                 return previous, False
@@ -100,7 +112,61 @@ class Store:
             record = self.decode(db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
         if record is None:
             raise KeyError(job_id)
+        if record["state"] == "deleted":
+            raise JobDeleted("This task and its stored images were deleted.")
         return record
+
+    def claim(self, job_id: str):
+        """Check and claim atomically so a stale worker list cannot revive a tombstone."""
+        with self._lock, self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            record = self.decode(db.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
+            if record is None or record["state"] not in {"queued", "running"}:
+                return None
+            db.execute("UPDATE jobs SET state='running',updated_at=? WHERE id=?", (utc_now(), job_id))
+            return record
+
+    def delete(self, job_id: str):
+        # Commit the tombstone before touching files. A crash or locked file must
+        # never turn an old clientRequestId into another inference request.
+        with self._lock, self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            record = db.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if record is None:
+                raise KeyError(job_id)
+            if record["state"] not in {"succeeded", "failed", "deleted"}:
+                raise JobNotFinished("Only finished tasks can be deleted; this does not cancel generation.")
+            # Validate before committing, even if a database was manually edited.
+            self.job_dir(job_id)
+            if record["state"] != "deleted":
+                db.execute("""UPDATE jobs SET state='deleted',metadata='{}',updated_at=?,
+                    prompt_id=NULL,submitting_at=NULL,error=NULL,result_sha256=NULL,result_bytes=NULL
+                    WHERE id=?""", (utc_now(), job_id))
+        self._remove_job_files(job_id)
+
+    def _remove_job_files(self, job_id: str):
+        with self._lock:
+            folder = self.job_dir(job_id)
+            try:
+                # Do not follow a replaced task directory into other artwork or backups.
+                if folder.is_symlink():
+                    folder.unlink()
+                else:
+                    shutil.rmtree(folder)
+            except FileNotFoundError:
+                # An absent child does not prove the remaining directory was removed.
+                if folder.exists() or folder.is_symlink():
+                    raise
+
+    def cleanup_deleted(self):
+        """Resume interrupted file cleanup after the process has acquired its lock."""
+        with self.connect() as db:
+            ids = [row["id"] for row in db.execute("SELECT id FROM jobs WHERE state='deleted'")]
+        for job_id in ids:
+            try:
+                self._remove_job_files(job_id)
+            except (OSError, ValueError):
+                logging.getLogger(__name__).warning("Deleted task files need cleanup; retry DELETE for task %s", job_id)
 
     def pending(self):
         with self.connect() as db:
@@ -110,9 +176,9 @@ class Store:
     def list(self, document_id: str | None = None, limit: int = 100):
         with self.connect() as db:
             if document_id is None:
-                rows = db.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+                rows = db.execute("SELECT * FROM jobs WHERE state!='deleted' ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
             else:
-                rows = db.execute("SELECT * FROM jobs WHERE json_extract(metadata,'$.documentId')=? ORDER BY created_at DESC LIMIT ?", (document_id, limit)).fetchall()
+                rows = db.execute("SELECT * FROM jobs WHERE state!='deleted' AND json_extract(metadata,'$.documentId')=? ORDER BY created_at DESC LIMIT ?", (document_id, limit)).fetchall()
         return [self.decode(row) for row in rows]
 
     def update(self, job_id: str, **fields):
@@ -123,15 +189,20 @@ class Store:
             fields["error"] = json.dumps(fields["error"], ensure_ascii=False) if fields["error"] is not None else None
         fields["updated_at"] = utc_now()
         with self._lock, self.connect() as db:
-            db.execute(f"UPDATE jobs SET {','.join(key + '=?' for key in fields)} WHERE id=?", (*fields.values(), job_id))
+            db.execute(f"UPDATE jobs SET {','.join(key + '=?' for key in fields)} WHERE id=? AND state!='deleted'", (*fields.values(), job_id))
 
     def succeed(self, job_id: str, result: bytes):
-        folder = self.job_dir(job_id)
-        partial = folder / "result.png.tmp"
-        partial.write_bytes(result)
-        partial.replace(folder / "result.png")
-        self.update(job_id, state="succeeded", error=None,
-                    result_sha256=hashlib.sha256(result).hexdigest(), result_bytes=len(result))
+        with self._lock, self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            record = db.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()
+            if record is None or record["state"] not in {"queued", "running"}:
+                return
+            folder = self.job_dir(job_id)
+            partial = folder / "result.png.tmp"
+            partial.write_bytes(result)
+            partial.replace(folder / "result.png")
+            db.execute("""UPDATE jobs SET state='succeeded',error=NULL,result_sha256=?,result_bytes=?,updated_at=?
+                WHERE id=?""", (hashlib.sha256(result).hexdigest(), len(result), utc_now(), job_id))
 
     def fail(self, job_id: str, code: str, message: str):
         self.update(job_id, state="failed", error={"code": code, "message": message})
