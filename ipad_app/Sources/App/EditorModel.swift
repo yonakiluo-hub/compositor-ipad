@@ -16,6 +16,10 @@ final class EditorModel: ObservableObject {
     @Published var saveFailed = false
     @Published var preview: CGImage?
     @Published var selectionPreview: CGImage?
+    @Published var selectionMode: SelectionCombineMode = .replace
+    @Published var selectionFeather: Double = 0
+    @Published var selectionGestureCommand: SelectionGestureCommand?
+    @Published var selectionDraftPointCount = 0
     @Published var viewportReset = 0
     @Published var pairing: BridgePairing?
     @Published var capabilities: BridgeCapabilities?
@@ -208,7 +212,10 @@ final class EditorModel: ObservableObject {
             try data.write(to: url, options: .atomic); return url
         } catch { errorMessage = error.localizedDescription; return nil }
     }
-    func clearSelection() { edit("取消选区") { $0.selectionMaskPNGData = nil } }
+    func clearSelection() {
+        selectionGestureCommand = .init(.cancel)
+        edit("取消选区") { $0.selectionMaskPNGData = nil }
+    }
     func invertSelection() {
         report {
             let context = try RasterImage.context(width: document.width, height: document.height, gray: true)
@@ -280,14 +287,15 @@ final class EditorModel: ObservableObject {
 }
 
 enum PadTool: String, CaseIterable, Identifiable {
-    case brush = "画笔", eraser = "橡皮", move = "移动", mask = "选区笔", maskErase = "减选", rectangle = "矩形选区", ellipse = "椭圆选区", eyedropper = "吸色"
+    case brush = "画笔", eraser = "橡皮", move = "移动", mask = "选区笔", maskErase = "减选", rectangle = "矩形选区", ellipse = "椭圆选区", lasso = "自由套索", polygonLasso = "多边形套索", eyedropper = "吸色"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .brush: "paintbrush.pointed"; case .eraser: "eraser"; case .move: "arrow.up.and.down.and.arrow.left.and.right"
         case .mask: "paintbrush.pointed.fill"; case .maskErase: "minus.circle"; case .rectangle: "rectangle.dashed"
-        case .ellipse: "circle.dashed"; case .eyedropper: "eyedropper"
+        case .ellipse: "circle.dashed"; case .lasso: "lasso"; case .polygonLasso: "pentagon"; case .eyedropper: "eyedropper"
         }
     }
-    var isSelection: Bool { [.mask, .maskErase, .rectangle, .ellipse].contains(self) }
+    var isShapeSelection: Bool { [.rectangle, .ellipse, .lasso, .polygonLasso].contains(self) }
+    var isSelection: Bool { [.mask, .maskErase].contains(self) || isShapeSelection }
 }

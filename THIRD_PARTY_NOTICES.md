@@ -23,6 +23,8 @@ The iPad editor includes and adapts code from [Compositor-ZH](https://github.com
 - `ipad_app/Sources/Rendering/CanvasViewport.swift`: viewport geometry and anchored zoom.
 - `ipad_app/Sources/Core/LayerGeometry.swift`: layer transforms and pass-through hierarchy semantics.
 - `ipad_app/Sources/Rendering/RasterImage.swift`: normalized Gaussian brush falloff adapted from `BrushRaster.falloff`.
+- `ipad_app/Sources/Rendering/SelectionMask.swift`: path rasterization and Gaussian feather radius/edge conventions adapted from `Document/Selection.swift`; raster coverage combination and intersection are iPad additions.
+- `ipad_app/Sources/App/SelectionGesture.swift`: document-coordinate draft and quarter-pixel path sampling adapted from `Document/Selection.swift`; touch-up vertices, frozen options, even-odd closure and command handling are iPad adaptations.
 - The native `.comp` reader/writer follows the inspected upstream v14 manifest and asset conventions; it implements an explicitly limited raster subset.
 - Copyright (c) 2026 Wonder Assembly LLC. MIT license retained in [licenses/Compositor-MIT.txt](licenses/Compositor-MIT.txt), with the original Chinese branch notice in [licenses/Compositor-ZH-NOTICE.md](licenses/Compositor-ZH-NOTICE.md).
 

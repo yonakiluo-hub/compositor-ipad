@@ -9,6 +9,7 @@ struct EditorView: View {
     @State private var showNew = false
     @State private var showLibrary = false
     @State private var showAdjustments = false
+    @State private var showSelectionFeather = false
     @State private var showSize = false
     @State private var shareURL: URL?
     @State private var showShare = false
@@ -31,6 +32,7 @@ struct EditorView: View {
                         CanvasView(model: model)
                         HStack(spacing: 14) {
                             Text("\(model.document.width) × \(model.document.height) px")
+                            Text(model.document.selectionMaskPNGData == nil ? "无选区" : "选区已启用").accessibilityIdentifier("selection.state")
                             Text(model.fingerDrawing ? "手指绘画 · 双指平移缩放" : "Pencil 绘画 · 手指平移")
                             Spacer()
                             Button { model.viewportReset += 1 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }.accessibilityLabel("适合画布")
@@ -93,6 +95,7 @@ struct EditorView: View {
         .sheet(isPresented: $showNew) { NewDocumentSheet(model: model) }
         .sheet(isPresented: $showSize) { NewDocumentSheet(model: model, resizing: true) }
         .sheet(isPresented: $showAdjustments) { AdjustmentSheet(model: model) }
+        .sheet(isPresented: $showSelectionFeather) { SelectionFeatherSheet(model: model) }
         .sheet(isPresented: $showLibrary) { libraryView }
         .sheet(isPresented: $showShare) { if let shareURL { ShareSheet(url: shareURL) } }
     }
@@ -141,6 +144,7 @@ struct EditorView: View {
                 Menu {
                     Button("取消选区") { model.clearSelection() }
                     Button("反选") { model.invertSelection() }
+                    Button("羽化当前选区…") { showSelectionFeather = true }.disabled(model.selectionPreview == nil)
                     Button("选区转图层蒙版") { model.selectionToLayerMask() }
                 } label: { Image(systemName: "selection.pin.in.out").font(.title3).frame(width: 46, height: 44) }.accessibilityLabel("选区操作")
             }.padding(.vertical, 16).padding(.horizontal, 6)
@@ -149,9 +153,30 @@ struct EditorView: View {
     private var brushBar: some View {
         HStack(spacing: 20) {
             Text(model.tool.rawValue).font(.subheadline.bold()).frame(width: 70, alignment: .leading)
-            HStack { Text("大小"); Slider(value: $model.diameter, in: 1...200); Text("\(Int(model.diameter))").monospacedDigit().frame(width: 30) }.frame(maxWidth: 260)
-            HStack { Text("硬度"); Slider(value: $model.hardness, in: 0...1) }.frame(maxWidth: 180)
-            HStack { Text("浓度"); Slider(value: $model.brushOpacity, in: 0.05...1) }.frame(maxWidth: 180)
+            if model.tool.isShapeSelection {
+                Picker("选区组合", selection: $model.selectionMode) {
+                    ForEach(SelectionCombineMode.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
+                }.pickerStyle(.segmented).frame(width: 230).disabled(model.selectionDraftPointCount > 0).accessibilityIdentifier("selection.mode")
+                HStack {
+                    Text("羽化")
+                    Slider(value: $model.selectionFeather, in: 0...100, step: 1).disabled(model.selectionDraftPointCount > 0).accessibilityIdentifier("selection.feather")
+                    Text("\(Int(model.selectionFeather)) px").monospacedDigit().frame(width: 48)
+                }.frame(width: 215)
+                if model.tool == .polygonLasso {
+                    HStack(spacing: 12) {
+                        Button("撤点") { model.selectionGestureCommand = .init(.undoPoint) }.disabled(model.selectionDraftPointCount == 0)
+                        Button("完成") { model.selectionGestureCommand = .init(.finish) }.disabled(model.selectionDraftPointCount < 3)
+                            .accessibilityIdentifier("selection.finish")
+                        Button("取消") { model.selectionGestureCommand = .init(.cancel) }.disabled(model.selectionDraftPointCount == 0)
+                    }
+                } else {
+                    Button("羽化当前选区…") { showSelectionFeather = true }.disabled(model.selectionPreview == nil)
+                }
+            } else {
+                HStack { Text("大小"); Slider(value: $model.diameter, in: 1...200); Text("\(Int(model.diameter))").monospacedDigit().frame(width: 30) }.frame(maxWidth: 260)
+                HStack { Text("硬度"); Slider(value: $model.hardness, in: 0...1) }.frame(maxWidth: 180)
+                HStack { Text("浓度"); Slider(value: $model.brushOpacity, in: 0.05...1) }.frame(maxWidth: 180)
+            }
             Spacer(minLength: 0)
             Toggle("手指绘画", isOn: $model.fingerDrawing).fixedSize().accessibilityIdentifier("finger.drawing")
         }.font(.caption).padding(.horizontal, 20).frame(height: 58)
@@ -365,6 +390,49 @@ struct EditorView: View {
     }
     private func stateName(_ state: BridgeJobState) -> String {
         switch state { case .queued: "排队中"; case .running: "处理中"; case .succeeded: "已完成"; case .failed: "失败" }
+    }
+}
+
+struct SelectionFeatherSheet: View {
+    @ObservedObject var model: EditorModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var radius: Double = 8
+    @State private var source: CGImage?
+    @State private var preview: CGImage?
+    @State private var documentID: UUID?
+    @State private var revision: Int64 = 0
+    @State private var previewError: String?
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                if let preview { Image(decorative: preview, scale: 1).resizable().scaledToFit().frame(maxHeight: 300) }
+                Text("白色区域参与编辑，灰色边缘部分参与，黑色区域受到保护。绘画、填充、调整和 AI 共用此选区。").font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Text("羽化半径")
+                    Slider(value: $radius, in: 0...100, step: 1) { editing in if !editing { updatePreview() } }
+                        .accessibilityIdentifier("selection.existingFeather")
+                    Text("\(Int(radius)) px").monospacedDigit().frame(width: 52)
+                }
+                if let previewError { Text(previewError).font(.caption).foregroundStyle(.red) }
+                Text("应用到当前选区，可一步撤销；取消不改变画稿。").font(.caption)
+            }.padding(24).navigationTitle("羽化当前选区")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("应用") {
+                        if let documentID { model.featherSelection(radius: radius, documentID: documentID, revision: revision) }
+                        dismiss()
+                    }.disabled(source == nil || previewError != nil).accessibilityIdentifier("selection.applyFeather") }
+                }
+                .onAppear {
+                    documentID = model.document.id; revision = model.document.revision
+                    source = model.selectionPreview; updatePreview()
+                }
+        }.presentationDetents([.large])
+    }
+    private func updatePreview() {
+        guard let source else { return }
+        do { preview = try SelectionMask.feather(mask: source, radius: radius); previewError = nil }
+        catch { previewError = error.localizedDescription }
     }
 }
 
