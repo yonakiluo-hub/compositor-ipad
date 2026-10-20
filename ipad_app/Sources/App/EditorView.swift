@@ -28,7 +28,7 @@ struct EditorView: View {
                 Divider()
                 HStack(spacing: 0) {
                     tools
-                    ZStack(alignment: .bottomLeading) {
+                    VStack(spacing: 0) {
                         CanvasView(model: model)
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 12) {
@@ -39,9 +39,12 @@ struct EditorView: View {
                                         .buttonStyle(.bordered).accessibilityIdentifier("selection.clear")
                                 }
                                 Spacer(minLength: 0)
+                                Button("回正 \(Int(model.viewportRotationDegrees.rounded()))°") { model.viewportRotationReset += 1 }
+                                    .accessibilityIdentifier("viewport.resetRotation")
                                 Button { model.viewportReset += 1 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }.accessibilityLabel("适合画布")
                             }
-                            Text(model.fingerDrawing ? "手指绘画 · 双指平移缩放" : "Pencil 绘画 · 手指平移")
+                            Text(model.tool == .transform ? "拖动控制点缩放 · 圆柄旋转 · 框内移动 · 双指调整视图" :
+                                model.fingerDrawing ? "手指绘画 · 双指平移、缩放、旋转" : "Pencil 绘画 · 手指平移 · 双指缩放、旋转")
                         }
                         .font(.caption).foregroundStyle(.secondary).padding(12)
                         .background(.ultraThinMaterial)
@@ -52,7 +55,8 @@ struct EditorView: View {
                     }
                 }
                 Divider()
-                ScrollView(.horizontal, showsIndicators: false) { brushBar.frame(minWidth: min(900, geometry.size.width)) }
+                if model.transformSession != nil { transformBar }
+                else { ScrollView(.horizontal, showsIndicators: false) { brushBar.frame(minWidth: min(900, geometry.size.width)) } }
             }
             .background(Color(red: 0.12, green: 0.14, blue: 0.17))
             .onAppear { compactLayout = geometry.size.width < 700; if compactLayout { sidebar = false } }
@@ -138,7 +142,7 @@ struct EditorView: View {
         ScrollView {
             VStack(spacing: 6) {
                 ForEach(PadTool.allCases) { tool in
-                    Button { model.tool = tool } label: {
+                    Button { if tool == .transform { model.beginTransform() } else { model.tool = tool } } label: {
                         Image(systemName: tool.symbol).font(.system(size: 20)).frame(width: 46, height: 44)
                             .foregroundStyle(model.tool == tool ? Color.black : Color.primary)
                             .background(model.tool == tool ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 10))
@@ -155,6 +159,24 @@ struct EditorView: View {
                 } label: { Image(systemName: "selection.pin.in.out").font(.title3).frame(width: 46, height: 44) }.accessibilityLabel("选区操作")
             }.padding(.vertical, 16).padding(.horizontal, 6)
         }.frame(width: 60)
+    }
+    private var transformBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 16) {
+                Toggle("锁定比例", isOn: $model.transformAspectLocked).fixedSize()
+                    .accessibilityIdentifier("transform.aspect")
+                Spacer()
+                Button("取消") { model.cancelTransform() }.accessibilityIdentifier("transform.cancel")
+                Button("完成") { model.commitTransform() }.buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("transform.commit")
+            }
+            if let session = model.transformSession {
+                Text(String(format: "宽 %.1f · 高 %.1f px · 旋转 %.1f°　预览中，完成后保存",
+                            Double(session.current.size.width), Double(session.current.size.height), Double(session.current.rotation)))
+                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    .accessibilityIdentifier("transform.geometry")
+            }
+        }.padding(.horizontal, 20).padding(.vertical, 10)
     }
     private var brushBar: some View {
         HStack(spacing: 20) {
