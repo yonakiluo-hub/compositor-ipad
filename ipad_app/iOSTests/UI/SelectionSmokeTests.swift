@@ -69,6 +69,27 @@ final class SelectionSmokeTests: XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 10))
         waitForLabel("选区已启用", on: app.staticTexts["selection.state"])
         XCTAssertFalse(app.alerts["操作未完成"].exists)
+
+        let clear = app.buttons["selection.clear"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 5))
+        clear.tap()
+        waitForLabel("无选区", on: selection)
+        XCTAssertFalse(clear.exists, "The clear action must disappear when no selection remains")
+        undo.tap()
+        waitForLabel("选区已启用", on: selection)
+        XCTAssertTrue(clear.exists, "Undo must restore both the selection and its clear action")
+        redo.tap()
+        waitForLabel("无选区", on: selection)
+        XCTAssertFalse(clear.exists)
+
+        app.buttons["文件菜单"].tap()
+        app.buttons["保存工程"].tap()
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        waitForLabel("无选区", on: app.staticTexts["selection.state"])
+        XCTAssertFalse(app.buttons["selection.clear"].exists)
+        XCTAssertFalse(app.alerts["操作未完成"].exists)
     }
 
     private func waitForLabel(_ value: String, on element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {

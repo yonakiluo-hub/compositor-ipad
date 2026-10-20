@@ -30,12 +30,18 @@ struct EditorView: View {
                     tools
                     ZStack(alignment: .bottomLeading) {
                         CanvasView(model: model)
-                        HStack(spacing: 14) {
-                            Text("\(model.document.width) × \(model.document.height) px")
-                            Text(model.document.selectionMaskPNGData == nil ? "无选区" : "选区已启用").accessibilityIdentifier("selection.state")
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(spacing: 12) {
+                                Text("\(model.document.width) × \(model.document.height) px")
+                                Text(model.document.selectionMaskPNGData == nil ? "无选区" : "选区已启用").accessibilityIdentifier("selection.state")
+                                if model.document.selectionMaskPNGData != nil {
+                                    Button("取消选区") { model.clearSelection() }
+                                        .buttonStyle(.bordered).accessibilityIdentifier("selection.clear")
+                                }
+                                Spacer(minLength: 0)
+                                Button { model.viewportReset += 1 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }.accessibilityLabel("适合画布")
+                            }
                             Text(model.fingerDrawing ? "手指绘画 · 双指平移缩放" : "Pencil 绘画 · 手指平移")
-                            Spacer()
-                            Button { model.viewportReset += 1 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }.accessibilityLabel("适合画布")
                         }
                         .font(.caption).foregroundStyle(.secondary).padding(12)
                         .background(.ultraThinMaterial)
