@@ -73,7 +73,10 @@ final class PadBrushStroke {
     func image() throws -> CGImage {
         let context = try RasterImage.context(width: Int(size.width), height: Int(size.height), gray: maskMode)
         let rect = CGRect(origin: .zero, size: size)
-        if let original { RasterImage.draw(original, in: rect, context: context) }
+        if let original {
+            if maskMode { PadMaskRaster.draw(original, in: rect, context: context) }
+            else { RasterImage.draw(original, in: rect, context: context) }
+        }
         guard let mask = coverage.makeImage() else { throw RasterError.allocation }
         if let selection { RasterImage.clip(selection, to: rect, context: context) }
         RasterImage.clip(mask, to: rect, context: context)

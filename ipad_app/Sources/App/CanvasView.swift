@@ -18,6 +18,8 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     private var transformInputID = UUID()
     private var isUpdatingView = false
     private var stroke: PadBrushStroke?
+    private var maskStrokeSession: LayerMaskStrokeSession?
+    private var strokeEditTarget: LayerEditTarget = .pixels
     private var strokeImage: CGImage?
     private var strokeLayer: RasterLayer?
     private var strokeRevision: Int64 = 0
@@ -59,6 +61,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     private var inputIsCurrent: Bool {
         model.document.id == strokeDocumentID && model.document.revision == strokeRevision && model.tool == gestureTool
             && (strokeLayer == nil || model.document.activeLayerID == strokeLayer?.id)
+            && model.layerEditTarget == strokeEditTarget
+            && (maskStrokeSession?.isCurrent(in: model) ?? true)
+            && (gestureTool.isSelection || strokeLayer == nil || model.selectedLayerIDs.count <= 1)
     }
     func update() {
         isUpdatingView = true
@@ -163,6 +168,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             } else {
                 image = try? model.renderer.render(model.transformPreviewDocument)
             }
+        } else if let session = maskStrokeSession, let strokeImage {
+            image = try? model.renderer.render(model.document, replacing: session.layer.id,
+                with: session.sourcePixels, replacementMask: strokeImage)
         } else if let strokeLayer, let strokeImage, !gestureTool.isSelection {
             image = try? model.renderer.render(model.document, replacing: strokeLayer.id, with: strokeImage)
         } else if let layer = strokeLayer, gestureTool == .move, startPoint != nil {
@@ -223,6 +231,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
               touch.type == .pencil || model.fingerDrawing || model.tool == .transform else { return }
         if let draft = selectionDraft, !draft.matches(documentID: model.document.id, revision: model.document.revision, kind: selectionKind(model.tool)) { cancelInput() }
         inputTouch = touch; gestureTool = model.tool; strokeRevision = model.document.revision; strokeDocumentID = model.document.id
+        strokeEditTarget = model.layerEditTarget
         let point = documentPoint(touch)
         if gestureTool == .transform {
             guard let session = model.transformSession,
@@ -247,15 +256,21 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
                 stroke = try PadBrushStroke(width: model.document.width, height: model.document.height, original: original,
                                             settings: model.brushSettings, selection: nil, maskMode: true)
             } else {
+                guard model.selectedLayerIDs.count <= 1 else { throw DocumentError.invalid("请先选择一个图层，再绘画或移动") }
                 guard let layer = model.activeLayer, !layer.isGroup else { throw DocumentError.invalid("请选择一个普通图层") }
                 guard !model.document.isEffectivelyLocked(layer.id) else { throw DocumentError.lockedLayer }
                 strokeLayer = layer
                 if gestureTool == .move { return }
-                let size = try model.renderer.pixelSize(of: layer)
-                stroke = try PadBrushStroke(width: Int(size.width), height: Int(size.height), original: model.renderer.image(for: layer),
-                                            settings: model.brushSettings,
-                                            selection: model.renderer.localSelection(model.selectionPreview, layer: layer, document: model.document), maskMode: false,
-                                            brushToPixels: model.renderer.pixelToDocument(layer, size: size).inverted())
+                if model.layerEditTarget == .mask {
+                    let session = try LayerMaskStrokeSession(model: model)
+                    maskStrokeSession = session; stroke = session.stroke
+                } else {
+                    let size = try model.renderer.pixelSize(of: layer)
+                    stroke = try PadBrushStroke(width: Int(size.width), height: Int(size.height), original: model.renderer.image(for: layer),
+                                                settings: model.brushSettings,
+                                                selection: model.renderer.localSelection(model.selectionPreview, layer: layer, document: model.document), maskMode: false,
+                                                brushToPixels: model.renderer.pixelToDocument(layer, size: size).inverted())
+                }
             }
             add(touch, event: event)
         } catch { model.errorMessage = error.localizedDescription; cancelInput() }
@@ -304,6 +319,10 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
                 model.updateLayer("移动图层") { $0.transform.origin = CGPoint(x: layer.transform.origin.x + delta.x, y: layer.transform.origin.y + delta.y) }
             } else if let stroke {
                 add(touch, event: nil)
+                if let session = maskStrokeSession {
+                    _ = model.commitLayerMaskStroke(session)
+                    return
+                }
                 let image = try stroke.image()
                 if gestureTool.isSelection { model.commitSelection(image) } else { model.commitPixels(image) }
             }
@@ -378,7 +397,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         if keepingPolygon, selectionDraft?.kind == .polygonal, selectionDraft?.points.isEmpty == false {
             selectionDraft?.cancelPointer()
         } else { selectionDraft = nil }
-        stroke = nil; strokeLayer = nil; strokeImage = nil; startPoint = nil
+        stroke = nil; maskStrokeSession = nil; strokeLayer = nil; strokeImage = nil; startPoint = nil
         inputTouch = nil; strokeDocumentID = nil; moveDelta = .zero; setNeedsDisplay()
         transformDrag = nil; transformSessionID = nil
         publishDraftCount()
