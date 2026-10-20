@@ -6,7 +6,9 @@ final class SelectionTransformWorkflowTests: XCTestCase {
     private enum Coverage { case hard, soft, empty, outside, none }
 
     @MainActor
-    private func fixture(_ coverage: Coverage = .hard, maskEnabled: Bool = true) throws
+    private func fixture(_ coverage: Coverage = .hard, maskEnabled: Bool = true,
+                         transform: LayerTransform? = nil, opacity: Double = 1,
+                         blendMode: LayerBlendMode = .normal, isVisible: Bool = true) throws
         -> (model: EditorModel, root: URL, preferences: UserDefaults) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("selection-transform-" + UUID().uuidString)
         let documents = root.appendingPathComponent("Documents")
@@ -22,7 +24,8 @@ final class SelectionTransformWorkflowTests: XCTestCase {
             mask.fill(CGRect(x: x, y: y, width: 1, height: 1))
         } }
         let layer = RasterLayer(name: "选中源图层", pngData: try RasterImage.png(XCTUnwrap(pixels.makeImage())),
-            transform: LayerTransform(origin: CGPoint(x: 4, y: 6), size: CGSize(width: 32, height: 24), sampling: .nearest),
+            transform: transform ?? LayerTransform(origin: CGPoint(x: 4, y: 6), size: CGSize(width: 32, height: 24), sampling: .nearest),
+            isVisible: isVisible, opacity: opacity, blendMode: blendMode,
             maskPNGData: try RasterImage.png(XCTUnwrap(mask.makeImage())), maskEnabled: maskEnabled)
         let other = RasterLayer(name: "其他图层", pngData: layer.pngData,
             transform: LayerTransform(origin: CGPoint(x: 44, y: 36), size: CGSize(width: 4, height: 3), sampling: .nearest))
@@ -94,6 +97,7 @@ final class SelectionTransformWorkflowTests: XCTestCase {
             XCTAssertFalse(model.editor.isModified)
         }
         let replacement = try XCTUnwrap(model.transformPreviewReplacement)
+        XCTAssertFalse(model.transformFixesLayerGeometry)
         XCTAssertEqual(replacement.transform, source.transform)
         XCTAssertEqual(replacement.image.width, 32)
         XCTAssertEqual(replacement.image.height, 24)
@@ -278,5 +282,151 @@ final class SelectionTransformWorkflowTests: XCTestCase {
         XCTAssertEqual(model.editor.undoCount, 0)
         XCTAssertTrue(model.commitTransform())
         XCTAssertEqual(try samples(RasterImage.decode(XCTUnwrap(model.activeLayer?.pngData))), try samples(cached.image))
+    }
+
+    @MainActor
+    func testRotatedAndSmoothScaledExpansionCommitsOnceAndReopensWithUndoableOriginalAssets() throws {
+        let transforms = [
+            LayerTransform(origin: CGPoint(x: -6, y: -5), size: CGSize(width: 48, height: 36),
+                           rotation: 37, flipX: true, sampling: .nearest),
+            LayerTransform(origin: CGPoint(x: -6, y: -5), size: CGSize(width: 48, height: 36), sampling: .high)
+        ]
+        for transform in transforms { for enabled in [true, false] {
+            let fixture = try fixture(.soft, maskEnabled: enabled, transform: transform,
+                                      opacity: 0.63, blendMode: .multiply)
+            let model = fixture.model, before = model.document
+            XCTAssertTrue(model.beginTransform())
+            XCTAssertFalse(model.transformFixesLayerGeometry, "Entering a transform must not fix the source geometry")
+            let session = try XCTUnwrap(model.transformSession)
+            let final = shifted(session.original, x: 32, y: 19)
+            for x in [CGFloat(32), 34, 32] {
+                XCTAssertTrue(model.previewTransform(shifted(session.original, x: x, y: 19), sessionID: session.id))
+                XCTAssertTrue(model.transformFixesLayerGeometry)
+                XCTAssertEqual(model.document, before)
+                XCTAssertEqual(model.editor.undoCount, 0)
+            }
+            XCTAssertEqual(model.transformSession?.current, final)
+            let replacement = try XCTUnwrap(model.transformPreviewReplacement)
+            XCTAssertTrue(replacement.rasterized)
+            XCTAssertEqual(replacement.transform.rotation, 0)
+            XCTAssertEqual(replacement.transform.size, CGSize(width: replacement.image.width, height: replacement.image.height))
+            XCTAssertNotNil(replacement.mask, "Disabled masks must remain separate editable assets")
+            let previewPixels = try samples(previewImage(model))
+            let selection = try samples(replacement.selection)
+            XCTAssertTrue(selection.contains { $0[0] > 0 }, "The moved selection remains visible at the canvas edge")
+            XCTAssertTrue(model.commitTransform(sessionID: session.id))
+            XCTAssertFalse(model.transformFixesLayerGeometry)
+            XCTAssertEqual(model.editor.undoCount, 1)
+            XCTAssertEqual(model.editor.undoName, "变换选区内容")
+            XCTAssertEqual(model.document.revision, before.revision + 1)
+            let committed = model.document, layer = try XCTUnwrap(committed.activeLayer)
+            XCTAssertEqual(layer.transform, replacement.transform)
+            XCTAssertEqual(layer.maskEnabled, enabled)
+            XCTAssertEqual(layer.opacity, before.activeLayer?.opacity)
+            XCTAssertEqual(layer.blendMode, before.activeLayer?.blendMode)
+            XCTAssertEqual(layer.parentID, before.activeLayer?.parentID)
+            XCTAssertEqual(committed.layers.map(\.id), before.layers.map(\.id))
+            XCTAssertEqual(committed.layers[1], before.layers[1])
+            XCTAssertEqual(try samples(model.renderer.render(committed)), previewPixels)
+            XCTAssertEqual(try samples(XCTUnwrap(model.selectionPreview)), selection)
+
+            model.undo()
+            XCTAssertEqual(model.document.layers, before.layers, "Undo restores original PNG, transform and mask bytes")
+            XCTAssertEqual(model.document.selectionMaskPNGData, before.selectionMaskPNGData)
+            model.redo()
+            XCTAssertEqual(model.document.layers, committed.layers)
+            XCTAssertEqual(model.document.selectionMaskPNGData, committed.selectionMaskPNGData)
+            model.saveNow()
+            let reopened = EditorModel(documentsURL: model.documentsURL,
+                supportURL: fixture.root.appendingPathComponent("ReopenedSupport"), preferences: fixture.preferences, loadPairing: false)
+            XCTAssertNil(reopened.errorMessage)
+            XCTAssertNil(reopened.transformSession)
+            XCTAssertFalse(reopened.transformFixesLayerGeometry)
+            XCTAssertEqual(reopened.document, model.document)
+            XCTAssertEqual(try samples(reopened.renderer.render(reopened.document)), previewPixels)
+            XCTAssertEqual(try samples(XCTUnwrap(reopened.selectionPreview)), selection)
+            reopened.suspend()
+        } }
+    }
+
+    @MainActor
+    func testRasterizedDraftCancelIdentityAndBackgroundPreserveOriginalBytesAndRedo() throws {
+        let model = try fixture(.soft, transform: LayerTransform(origin: CGPoint(x: -6, y: -5),
+            size: CGSize(width: 48, height: 36), rotation: 37, sampling: .high)).model
+        model.rename("可重做的名称"); model.undo()
+        let before = model.document, redoName = model.editor.redoName
+        XCTAssertTrue(model.beginTransform())
+        var session = try XCTUnwrap(model.transformSession)
+        XCTAssertTrue(model.previewTransform(shifted(session.original, x: 32, y: 19), sessionID: session.id))
+        XCTAssertTrue(model.transformFixesLayerGeometry)
+        model.saveNow()
+        XCTAssertEqual(try DocumentStore.load(from: model.documentURL), before, "Saving a draft retains the original assets")
+        model.cancelTransform()
+        XCTAssertFalse(model.transformFixesLayerGeometry)
+        XCTAssertEqual(model.document, before)
+        XCTAssertEqual(model.editor.redoName, redoName)
+        XCTAssertTrue(model.editor.canRedo)
+
+        XCTAssertTrue(model.beginTransform())
+        session = try XCTUnwrap(model.transformSession)
+        XCTAssertTrue(model.previewTransform(shifted(session.original, x: 32, y: 19), sessionID: session.id))
+        XCTAssertTrue(model.transformFixesLayerGeometry)
+        XCTAssertTrue(model.previewTransform(session.original, sessionID: session.id))
+        XCTAssertFalse(model.transformFixesLayerGeometry)
+        XCTAssertEqual(model.transformPreviewDocument, before)
+        XCTAssertTrue(model.commitTransform())
+        XCTAssertEqual(model.document, before, "Returning to identity must not encode the rasterized preparation")
+        XCTAssertEqual(model.editor.undoCount, 0)
+        XCTAssertEqual(model.editor.redoName, redoName)
+        XCTAssertTrue(model.editor.canRedo)
+
+        XCTAssertTrue(model.beginTransform())
+        session = try XCTUnwrap(model.transformSession)
+        XCTAssertTrue(model.previewTransform(shifted(session.original, x: 32, y: 19), sessionID: session.id))
+        model.suspend()
+        XCTAssertNil(model.transformSession)
+        XCTAssertFalse(model.transformFixesLayerGeometry)
+        XCTAssertEqual(model.document, before)
+        XCTAssertEqual(try DocumentStore.load(from: model.documentURL), before)
+        XCTAssertEqual(model.editor.redoName, redoName)
+        XCTAssertTrue(model.editor.canRedo)
+    }
+
+    @MainActor
+    func testRasterizedExpansionKeepsHiddenOffCanvasSourceAndIndependentMask() throws {
+        let originalTransform = LayerTransform(origin: CGPoint(x: -6, y: -5), size: CGSize(width: 48, height: 36),
+                                               rotation: 37, flipX: true, sampling: .high)
+        let model = try fixture(.soft, maskEnabled: false, transform: originalTransform,
+                                opacity: 0.37, blendMode: .screen, isVisible: false).model
+        let before = model.document
+        XCTAssertTrue(model.beginTransform())
+        let session = try XCTUnwrap(model.transformSession)
+        XCTAssertTrue(model.previewTransform(shifted(session.original, x: 32, y: 19), sessionID: session.id))
+        let replacement = try XCTUnwrap(model.transformPreviewReplacement)
+        XCTAssertTrue(model.transformFixesLayerGeometry)
+        XCTAssertLessThan(replacement.transform.origin.x, 0)
+        XCTAssertLessThan(replacement.transform.origin.y, 0)
+        let sourcePixels = try samples(replacement.image)
+        XCTAssertTrue(sourcePixels.contains { $0[3] == 255 }, "Visibility and layer opacity must not be baked into source pixels")
+        // This point lies outside the canvas but inside the original rotated raster,
+        // away from both the old selection and its moved destination.
+        let outside = CGPoint(x: -2, y: 4)
+        let x = Int(outside.x - replacement.transform.origin.x), y = Int(outside.y - replacement.transform.origin.y)
+        XCTAssertTrue((0..<replacement.image.width).contains(x) && (0..<replacement.image.height).contains(y))
+        if (0..<replacement.image.width).contains(x), (0..<replacement.image.height).contains(y) {
+            XCTAssertGreaterThan(sourcePixels[y * replacement.image.width + x][3], 0, "Off-canvas source content is retained")
+        }
+        let mask = try samples(XCTUnwrap(replacement.mask)).map { $0[0] }
+        XCTAssertTrue(mask.contains { $0 > 0 && $0 < 255 }, "The soft disabled mask is retained separately")
+        XCTAssertTrue(model.commitTransform())
+        let layer = try XCTUnwrap(model.activeLayer)
+        XCTAssertFalse(layer.isVisible)
+        XCTAssertFalse(layer.maskEnabled)
+        XCTAssertEqual(layer.opacity, 0.37)
+        XCTAssertEqual(layer.blendMode, .screen)
+        XCTAssertEqual(try samples(RasterImage.decode(XCTUnwrap(layer.pngData))), sourcePixels)
+        model.undo()
+        XCTAssertEqual(model.document.layers, before.layers)
+        XCTAssertEqual(model.document.selectionMaskPNGData, before.selectionMaskPNGData)
     }
 }

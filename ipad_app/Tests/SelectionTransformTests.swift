@@ -239,7 +239,7 @@ final class SelectionTransformTests: XCTestCase {
         XCTAssertEqual(try values(XCTUnwrap(result.mask)), [0, 64, 128])
     }
 
-    func testUnsupportedExpansionAndInvalidTransformFailWithoutChangingSource() throws {
+    func testInvalidTransformsFailButUnsafeExpansionUsesDocumentGrid() throws {
         let selection: [UInt8] = [255, 0, 0, 0]
         let doc = try document(width: 2, height: 2, pixels: Array(repeating: red, count: 4), selection: selection)
         let source = try SelectionTransformSource(document: doc, layer: doc.layers[0], renderer: DocumentRenderer())
@@ -255,10 +255,86 @@ final class SelectionTransformTests: XCTestCase {
             changed.layers[0].transform = LayerTransform(size: CGSize(width: 2 * scale, height: 2 * scale),
                                                         rotation: rotation, sampling: sampling)
             let transformedSource = try SelectionTransformSource(document: changed, layer: changed.layers[0], renderer: DocumentRenderer())
-            XCTAssertThrowsError(try transformedSource.preview(moved(transformedSource.original, x: 10))) {
-                guard case DocumentError.unsupported = $0 else { return XCTFail("Expected sampling protection, got \($0)") }
-            }
+            let result = try transformedSource.preview(moved(transformedSource.original, x: 10))
+            XCTAssertTrue(result.rasterized)
+            XCTAssertEqual(result.transform.rotation, 0)
+            XCTAssertEqual(result.transform.size, CGSize(width: result.image.width, height: result.image.height))
+            XCTAssertFalse(result.transform.flipX); XCTAssertFalse(result.transform.flipY)
+            let identity = try transformedSource.preview(transformedSource.original)
+            XCTAssertFalse(identity.rasterized)
+            XCTAssertEqual(identity.transform, changed.layers[0].transform)
+            XCTAssertEqual(try pixels(identity.image), Array(repeating: red, count: 4))
         }
+    }
+
+    func testRegriddedPreviewsKeepFrozenSourcesHandleBoxAndDisabledMask() throws {
+        for enabled in [false, true] {
+            let raster = (0..<48).map { $0.isMultiple(of: 3) ? [UInt8(128), 0, 0, 128] : blue }
+            let originalMask: [UInt8] = [0, 64, 128, 255, 128, 200, 0, 255, 255, 0, 128, 64]
+            let layer = RasterLayer(name: "文稿网格回退", pngData: try RasterImage.png(image(raster, width: 8, height: 6)),
+                transform: LayerTransform(origin: CGPoint(x: -3.25, y: 4.4), size: CGSize(width: 12.8, height: 7.2),
+                    rotation: 37, flipX: true, flipY: true, sampling: .high),
+                maskPNGData: try RasterImage.png(gray(originalMask, width: 4, height: 3)), maskEnabled: enabled)
+            let renderer = DocumentRenderer(), map = renderer.pixelToDocument(layer, size: CGSize(width: 8, height: 6))
+            let corners = [CGPoint(x: 2, y: 1), CGPoint(x: 6, y: 1), CGPoint(x: 6, y: 5), CGPoint(x: 2, y: 5)]
+                .map { $0.applying(map) }
+            let selection = try SelectionMask.rasterize(.polygon(corners), width: 32, height: 24)
+            let doc = CanvasDocument(width: 32, height: 24, layers: [layer], selectionMaskPNGData: try RasterImage.png(selection))
+            let source = try SelectionTransformSource(document: doc, layer: layer, renderer: renderer)
+            let original = source.original
+            let target = moved(original, x: 20.25, y: 7.5)
+            let first = try source.preview(target)
+            XCTAssertTrue(first.rasterized)
+            XCTAssertNotNil(first.mask)
+            XCTAssertEqual(first.transform.size, CGSize(width: first.image.width, height: first.image.height))
+            XCTAssertEqual(first.mask?.width, first.image.width)
+            XCTAssertEqual(first.mask?.height, first.image.height)
+            XCTAssertEqual(source.original, original, "Regridding must not move the user's handles")
+            XCTAssertEqual(first.transform.origin.x, first.transform.origin.x.rounded())
+            XCTAssertEqual(first.transform.origin.y, first.transform.origin.y.rounded())
+
+            // Dragging back into the old native bounds continues from the same sampled
+            // snapshot. Previous preview output must never become a new input image.
+            let near = try source.preview(moved(original, x: 0.25))
+            XCTAssertTrue(near.rasterized)
+            _ = try source.preview(moved(original, x: -8, y: 3))
+            let again = try source.preview(target)
+            XCTAssertEqual(first.transform, again.transform)
+            XCTAssertEqual(try pixels(first.image), try pixels(again.image))
+            XCTAssertEqual(try values(XCTUnwrap(first.mask)), try values(XCTUnwrap(again.mask)))
+            XCTAssertEqual(try values(first.selection), try values(again.selection))
+
+            let identity = try source.preview(original)
+            XCTAssertFalse(identity.rasterized)
+            XCTAssertTrue(identity.image === (try renderer.image(for: layer)))
+            XCTAssertEqual(identity.transform, layer.transform)
+            XCTAssertEqual(try values(XCTUnwrap(identity.mask)), originalMask)
+            XCTAssertEqual(try values(identity.selection), try values(selection))
+            XCTAssertEqual(doc.layers[0], layer)
+            XCTAssertTrue(try source.preview(target).rasterized, "Identity must not discard the frozen fallback")
+        }
+    }
+
+    func testNativeOversizeCanRegridButFailedFallbackDoesNotChangeSource() throws {
+        // A 64-pixel source shown at four document pixels needs thousands of native
+        // pixels to move across a modest document. Decide its document-grid fallback
+        // before rejecting the unnecessary native allocation.
+        let raster = Array(repeating: red, count: 64 * 64)
+        let layer = RasterLayer(name: "缩小图层", pngData: try RasterImage.png(image(raster, width: 64, height: 64)),
+            transform: LayerTransform(origin: CGPoint(x: 2.25, y: 2.25), size: CGSize(width: 4, height: 4), sampling: .high))
+        let selection = try SelectionMask.rasterize(.rectangle(CGRect(x: 3, y: 3, width: 2, height: 2)), width: 16, height: 16)
+        let doc = CanvasDocument(width: 16, height: 16, layers: [layer], selectionMaskPNGData: try RasterImage.png(selection))
+        let renderer = DocumentRenderer(), source = try SelectionTransformSource(document: doc, layer: layer, renderer: renderer)
+        XCTAssertThrowsError(try source.preview(moved(source.original, x: 5000)))
+        let stillNative = try source.preview(moved(source.original, x: 0.125))
+        XCTAssertFalse(stillNative.rasterized, "Failed fallback must not change subsequent native previews")
+        let result = try source.preview(moved(source.original, x: 300))
+        XCTAssertTrue(result.rasterized)
+        XCTAssertLessThan(result.image.width, 400)
+        let identity = try source.preview(source.original)
+        XCTAssertFalse(identity.rasterized)
+        XCTAssertEqual(identity.image.width, 64)
+        XCTAssertTrue(identity.image === (try renderer.image(for: layer)))
     }
 
     func testSmoothInternalEdgeKeepsFractionalSupportAfterTranslationAndRotation() throws {

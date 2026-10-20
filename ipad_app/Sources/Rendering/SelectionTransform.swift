@@ -10,6 +10,13 @@ struct SelectionTransformResult {
     let transform: LayerTransform
     let mask: CGImage?
     let selection: CGImage
+    /// The current layer's displayed scale/rotation was sampled once onto document pixels.
+    let rasterized: Bool
+
+    init(image: CGImage, transform: LayerTransform, mask: CGImage?, selection: CGImage, rasterized: Bool = false) {
+        self.image = image; self.transform = transform; self.mask = mask; self.selection = selection
+        self.rasterized = rasterized
+    }
 }
 
 /// A frozen selected-pixel edit. Preview never mutates the source document, encodes PNG,
@@ -28,23 +35,31 @@ final class SelectionTransformSource {
     private let maskPixels: [UInt8]?
     private let toDocument: CGAffineTransform
     private let nearest: Bool
+    private var cachedRegriddedSource: SelectionTransformSource?
+    private enum ExpansionRequirement: Error { case regrid }
 
-    init(document: CanvasDocument, layer: RasterLayer, renderer: DocumentRenderer) throws {
+    convenience init(document: CanvasDocument, layer: RasterLayer, renderer: DocumentRenderer) throws {
         guard !layer.isGroup, layer.transform.isValid,
               document.layers.contains(where: { $0 == layer }) else { throw DocumentError.invalid("选区变换的图层无效") }
         guard !document.isEffectivelyLocked(layer.id) else { throw DocumentError.lockedLayer }
         guard let selectionData = document.selectionMaskPNGData else { throw DocumentError.invalid("请先创建选区") }
         let selection = try RasterImage.decode(selectionData)
-        let gray = try Self.grayBytes(selection)
         guard selection.width == document.width, selection.height == document.height else {
             throw DocumentError.invalid("选区尺寸与画布不一致")
         }
+        guard let image = try renderer.image(for: layer) else { throw DocumentError.invalid("这个图层还没有内容") }
+        try self.init(layer: layer, image: image, mask: layer.maskPNGData.map(RasterImage.decode), selection: selection)
+    }
+
+    /// Decoded sources keep the one-time document-grid fallback out of PNG encoding.
+    private init(layer: RasterLayer, image: CGImage, mask: CGImage?, selection: CGImage,
+                 handleBox: LayerTransform? = nil) throws {
+        let gray = try Self.grayBytes(selection)
         guard let bounds = Self.nonzeroBounds(gray, width: selection.width, height: selection.height, stride: 1, channel: 0) else {
             throw DocumentError.invalid("选区为空，无法变换")
         }
-        guard let image = try renderer.image(for: layer) else { throw DocumentError.invalid("这个图层还没有内容") }
         let pixels = try Self.rgbaBytes(image)
-        let mapping = renderer.pixelToDocument(layer, size: CGSize(width: image.width, height: image.height))
+        let mapping = Self.placement(layer.transform, size: CGSize(width: image.width, height: image.height))
         guard Self.valid(mapping), Self.valid(mapping.inverted()) else { throw DocumentError.invalid("图层变换不可逆") }
         let nearest = layer.transform.sampling == .nearest
         var cut = [UInt8](repeating: 0, count: pixels.count)
@@ -58,7 +73,6 @@ final class SelectionTransformSource {
         guard let selectedPixels = Self.nonzeroBounds(cut, width: image.width, height: image.height, stride: 4, channel: 3) else {
             throw DocumentError.invalid("当前图层的选区内没有可变换像素")
         }
-        let mask = try layer.maskPNGData.map(RasterImage.decode)
         self.layer = layer
         sourceImage = image; lifted = cut
         remaining = zip(pixels, cut).map { $0 - $1 }
@@ -69,7 +83,7 @@ final class SelectionTransformSource {
         selectionImage = selection; selectionPixels = gray
         layerMask = mask; maskPixels = try mask.map(Self.grayBytes)
         toDocument = mapping; self.nearest = nearest
-        original = LayerTransform(origin: bounds.origin, size: bounds.size, sampling: layer.transform.sampling)
+        original = handleBox ?? LayerTransform(origin: bounds.origin, size: bounds.size, sampling: layer.transform.sampling)
     }
 
     func preview(_ transform: LayerTransform) throws -> SelectionTransformResult {
@@ -77,6 +91,10 @@ final class SelectionTransformSource {
         if transform == original {
             return SelectionTransformResult(image: sourceImage, transform: layer.transform, mask: layerMask, selection: selectionImage)
         }
+        // Once the preview needs a document-grid source, retain that same frozen source
+        // for all later nonidentity previews, including dragging back inside the old bounds.
+        // Returning to identity still restores the original native image and mask above.
+        if let source = cachedRegriddedSource { return try regriddedPreview(transform, source: source) }
         let from = Self.placement(original, size: original.size)
         let to = Self.placement(transform, size: original.size)
         // CGPoint applies concatenations left to right: document T, then native A^-1 T A.
@@ -85,7 +103,20 @@ final class SelectionTransformSource {
         guard Self.valid(documentMap), Self.valid(documentMap.inverted()),
               Self.valid(nativeMap), Self.valid(nativeMap.inverted()) else { throw DocumentError.invalid("选区变换不可逆") }
         let movedBounds = try Self.bounds(liftedBounds, applying: nativeMap)
-        let extent = try expandedExtent(including: movedBounds)
+        let extent: CGRect
+        do { extent = try expandedExtent(including: movedBounds) }
+        catch ExpansionRequirement.regrid {
+            let regridded = try LayerRegrid.prepare(layer: layer, image: sourceImage, mask: layerMask)
+            var projectedLayer = layer
+            projectedLayer.transform = regridded.transform
+            let source = try SelectionTransformSource(layer: projectedLayer, image: regridded.image,
+                mask: regridded.mask, selection: selectionImage, handleBox: original)
+            let result = try regriddedPreview(transform, source: source)
+            // A failed allocation or out-of-range preview must not change this session's
+            // behavior. Cache only after the first fallback preview succeeds.
+            cachedRegriddedSource = source
+            return result
+        }
         let width = Int(extent.width), height = Int(extent.height)
         let shiftX = -Int(extent.minX), shiftY = -Int(extent.minY)
         let expandedTransform = try transformForExtent(extent)
@@ -129,6 +160,12 @@ final class SelectionTransformSource {
             transform: expandedTransform, mask: try expandedMask(extent), selection: try movedSelection(documentMap))
     }
 
+    private func regriddedPreview(_ transform: LayerTransform, source: SelectionTransformSource) throws -> SelectionTransformResult {
+        let result = try source.preview(transform)
+        return SelectionTransformResult(image: result.image, transform: result.transform, mask: result.mask,
+                                        selection: result.selection, rasterized: true)
+    }
+
     private func movedSelection(_ mapping: CGAffineTransform) throws -> CGImage {
         let width = selectionImage.width, height = selectionImage.height
         var output = [UInt8](repeating: 0, count: width * height)
@@ -162,7 +199,6 @@ final class SelectionTransformSource {
         let left = align(needed.minX, step: stepX, up: false), top = align(needed.minY, step: stepY, up: false)
         let extent = CGRect(x: left, y: top, width: align(needed.maxX, step: stepX, up: true) - left,
                             height: align(needed.maxY, step: stepY, up: true) - top)
-        try Self.checkSize(extent.size)
         if extent != old {
             // Same preservation boundary as DocumentRenderer.expansionPlan: padding changes
             // edge-clamp sampling and moves antialiased rotated bounds into the texture interior.
@@ -176,9 +212,15 @@ final class SelectionTransformSource {
             let maskExact = layerMask.map { near(scaleX * CGFloat(sourceImage.width) / CGFloat($0.width), 1)
                 && near(scaleY * CGFloat(sourceImage.height) / CGFloat($0.height), 1) } ?? true
             guard axisAligned, integerEdges, nearest || (rasterExact && maskExact) else {
-                throw DocumentError.unsupported("当前图层的旋转或平滑缩放无法无损扩展像素范围，请把选中内容保持在原图层范围内")
+                // Transparent/white padding would change the old texture's edge clamps
+                // and can reveal pixels hidden by a black mask. Resample the frozen layer
+                // once at its existing document resolution instead of blocking the edit.
+                throw ExpansionRequirement.regrid
             }
         }
+        // Decide the sampling domain before checking native allocation size: an extremely
+        // downscaled layer may need a huge native padding but a small document-grid raster.
+        try Self.checkSize(extent.size)
         if let mask = layerMask {
             try Self.checkSize(CGSize(width: extent.width * CGFloat(mask.width) / CGFloat(sourceImage.width),
                                      height: extent.height * CGFloat(mask.height) / CGFloat(sourceImage.height)))

@@ -173,6 +173,11 @@ struct EditorView: View {
             if let session = model.transformSession {
                 Text(session.scope == .selection ? "变换选中内容 · 选区随动 · 图层蒙版保持原位" : "变换整个图层 · 蒙版随动")
                     .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("transform.scope")
+                Text(model.transformFixesLayerGeometry
+                    ? "完成将按当前显示尺寸固定本层的缩放与旋转；取消或撤销可恢复原层。"
+                    : " ")
+                    .font(.caption).foregroundStyle(.orange).lineLimit(2).frame(height: 30, alignment: .leading)
+                    .accessibilityIdentifier("transform.rasterizationNotice")
                 Text(String(format: "宽 %.1f · 高 %.1f px · 旋转 %.1f°　预览中，完成后保存",
                             Double(session.current.size.width), Double(session.current.size.height), Double(session.current.rotation)))
                     .font(.caption).monospacedDigit().foregroundStyle(.secondary)

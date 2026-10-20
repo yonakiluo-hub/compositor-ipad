@@ -57,6 +57,10 @@ extension EditorModel {
         return session.selectionResult
     }
 
+    var transformFixesLayerGeometry: Bool {
+        transformPreviewReplacement?.rasterized == true
+    }
+
     var displayedSelectionPreview: CGImage? {
         transformPreviewReplacement?.selection ?? selectionPreview
     }
