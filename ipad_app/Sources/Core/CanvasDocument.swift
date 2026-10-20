@@ -13,7 +13,7 @@ public enum DocumentError: LocalizedError, Equatable {
         case .lockedLayer: "图层已锁定。"
         case .tooLarge: "工程超出当前安全大小限制。"
         case .wrongDocument: "候选属于另一份文稿。"
-        case .staleRevision: "文稿已改变。候选仍然保留，请基于当前文稿重新生成。"
+        case .staleRevision: "文稿版本已改变。候选仍然保留，请重新预览并确认是否按原位置加入。"
         case .changedCanvas: "画布尺寸已改变，无法按原坐标插入候选。"
         case .duplicateResult: "此候选已加入过文稿；如刚撤销，可使用重做恢复。"
         case .revisionExhausted: "文稿版本已达到上限，请另存为新文稿。"

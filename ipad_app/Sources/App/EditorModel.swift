@@ -20,7 +20,16 @@ final class EditorModel: ObservableObject {
     @Published var pairing: BridgePairing?
     @Published var capabilities: BridgeCapabilities?
     @Published var jobs: [BridgeJob] = []
-    @Published var candidates: [String: Data] = [:]
+    @Published var candidates = CandidatePreviewCache()
+    @Published var loadingCandidateKeys: Set<String> = []
+    @Published var removingJobIDs: Set<String> = []
+    @Published var candidateManagementStatus = ""
+    @Published var locallyRemovedJobIDs: Set<String> = []
+    @Published var pendingDeletionJobIDs: Set<String> = []
+    @Published var unavailableJobIDs: Set<String> = []
+    var hiddenJobIDs: Set<String> = []
+    var candidateLoadOperations: [String: UUID] = [:]
+    var candidateRemovalOperations: [String: UUID] = [:]
     @Published var pendingRequests: [String] = []
     @Published var networkBusy = false
     @Published var backupStatus = ""
@@ -28,36 +37,39 @@ final class EditorModel: ObservableObject {
     @Published var library: [URL] = []
     let renderer = DocumentRenderer()
     let documentsURL: URL
+    private let preferences: UserDefaults
     var taskStore: BridgeSubmissionStore?
     private var autosave: Task<Void, Never>?
     var recoveryTask: Task<Void, Never>?
     var bridge: BridgeClient?
     var isRefreshing = false
+    var isRestoringCandidates = false
 
     var document: CanvasDocument { editor.document }
     var activeLayer: RasterLayer? { document.activeLayer }
     var brushSettings: PadBrushSettings { PadBrushSettings(diameter: diameter, hardness: hardness, opacity: brushOpacity, color: UIColor(color), erasing: tool == .eraser || tool == .maskErase) }
 
-    init() {
+    init(documentsURL: URL? = nil, supportURL: URL? = nil, preferences: UserDefaults = .standard, loadPairing: Bool = true) {
         let manager = FileManager.default
-        documentsURL = manager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        self.documentsURL = documentsURL ?? manager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        self.preferences = preferences
+        let support = supportURL ?? manager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let initial = Self.blankDocument(name: "未命名画稿", width: 1200, height: 900)
         editor = try! DocumentEditor(document: initial)
         do { taskStore = try BridgeSubmissionStore(directory: support.appendingPathComponent("BridgeTasks")) }
         catch { errorMessage = "无法准备任务恢复目录：\(error.localizedDescription)" }
         do {
-            try manager.createDirectory(at: documentsURL, withIntermediateDirectories: true)
-            if let last = UserDefaults.standard.string(forKey: "lastDocument"),
+            try manager.createDirectory(at: self.documentsURL, withIntermediateDirectories: true)
+            if let last = preferences.string(forKey: "lastDocument"),
                UUID(uuidString: last) != nil {
-                let url = documentsURL.appendingPathComponent(last + ".comp")
+                let url = self.documentsURL.appendingPathComponent(last + ".comp")
                 if manager.fileExists(atPath: url.path) {
                     let loaded = try DocumentStore.load(from: url)
                     try Self.checkRenderLimits(loaded)
                     editor = try DocumentEditor(document: loaded)
                 }
             }
-            pairing = try KeychainPairingStore().load()
+            if loadPairing { pairing = try KeychainPairingStore().load() }
             if let pairing { bridge = try BridgeClient(pairing: pairing) }
         } catch { errorMessage = error.localizedDescription }
         refresh(); refreshLibrary()
@@ -113,7 +125,7 @@ final class EditorModel: ObservableObject {
         do {
             try DocumentStore.save(document, to: documentURL)
             editor.markSaved()
-            UserDefaults.standard.set(document.id.uuidString.lowercased(), forKey: "lastDocument")
+            preferences.set(document.id.uuidString.lowercased(), forKey: "lastDocument")
             status = "已保存 · 版本 \(document.revision)"; saveFailed = false
             refreshLibrary()
         } catch { status = "保存失败"; saveFailed = true; errorMessage = error.localizedDescription }
@@ -131,7 +143,7 @@ final class EditorModel: ObservableObject {
             let destination = documentsURL.appendingPathComponent(loaded.id.uuidString.lowercased() + ".comp")
             let imported = DocumentStore.resolvingImportCollision(loaded, from: url, localDestination: destination,
                 destinationExists: FileManager.default.fileExists(atPath: destination.path))
-            editor = try DocumentEditor(document: imported); renderer.clearCache(); candidates.removeAll(); jobs.removeAll(); pendingRequests.removeAll()
+            editor = try DocumentEditor(document: imported); renderer.clearCache(); resetCandidateContext(); jobs.removeAll(); pendingRequests.removeAll()
             viewportReset += 1; changed(); restartRecovery()
         }
     }
@@ -140,7 +152,7 @@ final class EditorModel: ObservableObject {
         report {
             _ = try RasterImage.context(width: width, height: height)
             editor = try DocumentEditor(document: Self.blankDocument(name: name.isEmpty ? "未命名画稿" : name, width: width, height: height))
-            renderer.clearCache(); candidates.removeAll(); jobs.removeAll(); pendingRequests.removeAll(); viewportReset += 1; changed(); restartRecovery()
+            renderer.clearCache(); resetCandidateContext(); jobs.removeAll(); pendingRequests.removeAll(); viewportReset += 1; changed(); restartRecovery()
         }
     }
     func addLayer(group: Bool = false) {

@@ -129,6 +129,103 @@ final class CoreDocumentTests: XCTestCase {
         XCTAssertFalse(editor.canUndo)
     }
 
+    func testOlderCandidateRequiresExplicitChoiceAndAddsIndependentUndoableLayer() throws {
+        let editor = try DocumentEditor(document: fixture())
+        let original = editor.document
+        let crop = PixelRect(x: 7, y: 9, width: 8, height: 6)
+        let anchor = GenerationAnchor(documentID: original.id, baseRevision: original.revision,
+                                      canvasWidth: original.width, canvasHeight: original.height, cropRect: crop)
+        let pixels = try png()
+        let firstKey = AIResultKey(jobID: "same-generation", resultID: "0")
+        let secondKey = AIResultKey(jobID: "same-generation", resultID: "1")
+        let firstID = try editor.insertAIResult(pngData: pixels, key: firstKey, anchor: anchor, name: "候选 A")
+        let afterFirst = editor.document
+        let count = editor.undoCount
+
+        XCTAssertThrowsError(try editor.insertAIResult(pngData: pixels, key: secondKey, anchor: anchor)) {
+            XCTAssertEqual($0 as? DocumentError, .staleRevision)
+        }
+        XCTAssertEqual(editor.document, afterFirst, "The default must not apply a stale result automatically")
+        XCTAssertEqual(editor.undoCount, count)
+
+        let secondID = try editor.insertAIResult(pngData: pixels, key: secondKey, anchor: anchor,
+                                                name: "候选 B", allowChangedRevision: true)
+        let inserted = editor.document
+        XCTAssertEqual(inserted.layers.count, original.layers.count + 2)
+        XCTAssertEqual(Array(inserted.layers.dropLast()), afterFirst.layers, "Original pixels and the first candidate are retained")
+        XCTAssertEqual(inserted.layers.last?.id, secondID)
+        XCTAssertNotEqual(secondID, firstID)
+        XCTAssertEqual(inserted.layers.last?.pngData, pixels)
+        XCTAssertEqual(inserted.layers.last?.transform.origin, crop.cgRect.origin)
+        XCTAssertEqual(inserted.layers.last?.transform.size, crop.cgRect.size)
+        XCTAssertEqual(inserted.activeLayerID, secondID)
+        XCTAssertEqual(inserted.revision, afterFirst.revision + 1)
+        XCTAssertEqual(editor.undoCount, count + 1)
+        XCTAssertEqual(anchor.baseRevision, original.revision, "Explicit insertion must not rewrite the generation anchor")
+
+        try editor.undo()
+        XCTAssertEqual(editor.document.layers, afterFirst.layers, "One undo removes only candidate B")
+        XCTAssertEqual(editor.document.activeLayerID, firstID)
+        XCTAssertTrue(editor.document.appliedAIResults.contains(secondKey))
+        XCTAssertThrowsError(try editor.insertAIResult(pngData: pixels, key: secondKey, anchor: anchor, allowChangedRevision: true)) {
+            XCTAssertEqual($0 as? DocumentError, .duplicateResult)
+        }
+        XCTAssertTrue(editor.canRedo)
+        try editor.redo()
+        XCTAssertEqual(editor.document.layers, inserted.layers, "Redo restores the same layer and coordinates")
+        XCTAssertEqual(editor.document.activeLayerID, secondID)
+        try editor.undo()
+
+        let url = try packageURL()
+        try DocumentStore.save(editor.document, to: url)
+        let reopened = try DocumentEditor(document: DocumentStore.load(from: url))
+        XCTAssertEqual(reopened.document.layers, afterFirst.layers)
+        for key in [firstKey, secondKey] {
+            XCTAssertThrowsError(try reopened.insertAIResult(pngData: pixels, key: key, anchor: anchor, allowChangedRevision: true)) {
+                XCTAssertEqual($0 as? DocumentError, .duplicateResult, "Consent must not bypass receipts after reopening")
+            }
+        }
+        XCTAssertFalse(reopened.canUndo)
+    }
+
+    func testExplicitOlderCandidateChoiceStillRejectsUnsafeAnchorsAndPixels() throws {
+        let editor = try DocumentEditor(document: fixture())
+        try editor.setOpacity(layerID: editor.document.layers[0].id, opacity: 0.5)
+        try editor.undo()
+        let before = editor.document
+        let pixels = try png()
+        let key = AIResultKey(jobID: "older-candidate", resultID: "0")
+        func anchor(id: UUID? = nil, revision: Int64 = 0, width: Int = 32, height: Int = 24,
+                    crop: PixelRect = PixelRect(x: 7, y: 9, width: 8, height: 6)) -> GenerationAnchor {
+            GenerationAnchor(documentID: id ?? before.id, baseRevision: revision,
+                             canvasWidth: width, canvasHeight: height, cropRect: crop)
+        }
+        let rejected: [(GenerationAnchor, DocumentError)] = [
+            (anchor(id: UUID()), .wrongDocument),
+            (anchor(revision: before.revision + 1), .staleRevision),
+            (anchor(revision: -1), .staleRevision),
+            (anchor(width: 31), .changedCanvas),
+            (anchor(height: 23), .changedCanvas),
+            (anchor(crop: PixelRect(x: 30, y: 9, width: 8, height: 6)), .invalid("候选裁切区域越界")),
+            (anchor(crop: PixelRect(x: -1, y: 9, width: 8, height: 6)), .invalid("候选裁切区域越界")),
+            (anchor(crop: PixelRect(x: 7, y: 9, width: 0, height: 6)), .invalid("候选裁切区域越界")),
+            (anchor(crop: PixelRect(x: 7, y: 9, width: 7, height: 6)), .invalid("候选像素尺寸与裁切区域不符"))
+        ]
+        for (invalid, expected) in rejected {
+            XCTAssertThrowsError(try editor.insertAIResult(pngData: pixels, key: key, anchor: invalid, allowChangedRevision: true)) {
+                XCTAssertEqual($0 as? DocumentError, expected)
+            }
+            XCTAssertEqual(editor.document, before)
+            XCTAssertFalse(editor.canUndo)
+            XCTAssertTrue(editor.canRedo, "Rejected explicit insertion must preserve previous history")
+        }
+        for invalidPixels in [Data("invalid PNG".utf8), try png(gray: true)] {
+            XCTAssertThrowsError(try editor.insertAIResult(pngData: invalidPixels, key: key, anchor: anchor(), allowChangedRevision: true))
+            XCTAssertEqual(editor.document, before)
+            XCTAssertTrue(editor.canRedo)
+        }
+    }
+
     func testHierarchyOpacityVisibilityReorderDuplicateDeleteAndLock() throws {
         var document = try fixture()
         let group = RasterLayer(name: "组", transform: LayerTransform(size: document.size), opacity: 0.5, isGroup: true)
