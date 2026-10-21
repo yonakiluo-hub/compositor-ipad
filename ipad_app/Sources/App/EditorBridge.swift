@@ -131,7 +131,7 @@ extension EditorModel {
             }
         }
     }
-    func suspend() { saveNow(); recoveryTask?.cancel() }
+    func suspend() { cancelTransform(); saveNow(); recoveryTask?.cancel() }
     func refreshJobs(retryDeletions: Bool = true) async {
         // A replacement recovery task may start before its cancelled predecessor unwinds.
         // Wait asynchronously for that owner instead of silently dropping the new refresh.

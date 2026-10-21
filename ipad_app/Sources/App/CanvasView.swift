@@ -11,7 +11,12 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     let model: EditorModel
     var viewport = CanvasViewport()
     private var resetToken = -1
+    private var rotationResetToken = -1
     private var panGesture: UIPanGestureRecognizer!
+    private var transformDrag: FreeTransformGesture?
+    private var transformSessionID: UUID?
+    private var transformInputID = UUID()
+    private var isUpdatingView = false
     private var stroke: PadBrushStroke?
     private var strokeImage: CGImage?
     private var strokeLayer: RasterLayer?
@@ -37,6 +42,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinch(_:)))
         pinch.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         pinch.delegate = self; addGestureRecognizer(pinch)
+        let rotation = UIRotationGestureRecognizer(target: self, action: #selector(rotateView(_:)))
+        rotation.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+        rotation.delegate = self; addGestureRecognizer(rotation)
         let undo = UITapGestureRecognizer(target: self, action: #selector(undoTap))
         undo.numberOfTouchesRequired = 2; undo.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
         addGestureRecognizer(undo)
@@ -53,6 +61,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             && (strokeLayer == nil || model.document.activeLayerID == strokeLayer?.id)
     }
     func update() {
+        isUpdatingView = true
+        defer { isUpdatingView = false }
+        if transformDrag != nil && model.transformSession?.id != transformSessionID { cancelInput() }
         if let selectionDraft, !selectionDraft.matches(documentID: model.document.id, revision: model.document.revision,
                                                        kind: selectionKind(model.tool)) { cancelInput() }
         if inputTouch != nil && !inputIsCurrent { cancelInput() }
@@ -72,8 +83,20 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
                 }
             }
         }
-        if model.viewportReset != resetToken { resetToken = model.viewportReset; viewport.fit(documentSize: model.document.size) }
-        panGesture.minimumNumberOfTouches = model.fingerDrawing ? 2 : 1
+        if model.viewportRotationReset != rotationResetToken {
+            cancelInput(keepingPolygon: true)
+            rotationResetToken = model.viewportRotationReset
+            viewport.resetRotation(documentSize: model.document.size); publishViewRotation()
+        }
+        if model.viewportReset != resetToken {
+            cancelInput(keepingPolygon: true)
+            resetToken = model.viewportReset
+            // Fit last: the initial rotation reset must not disable automatic
+            // fitting when the device subsequently changes orientation.
+            viewport.resetRotation(documentSize: model.document.size); viewport.fit(documentSize: model.document.size)
+            publishViewRotation()
+        }
+        panGesture.minimumNumberOfTouches = model.fingerDrawing || model.tool == .transform ? 2 : 1
         setNeedsDisplay()
     }
     override func layoutSubviews() {
@@ -85,7 +108,10 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         !(inputTouch?.type == .pencil && touch.type == .direct)
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-        gestureRecognizer is UIPinchGestureRecognizer || other is UIPinchGestureRecognizer
+        let navigates: (UIGestureRecognizer) -> Bool = {
+            $0 is UIPinchGestureRecognizer || $0 is UIRotationGestureRecognizer || $0 is UIPanGestureRecognizer
+        }
+        return navigates(gestureRecognizer) && navigates(other)
     }
     @objc private func pan(_ gesture: UIPanGestureRecognizer) {
         cancelInput(keepingPolygon: true)
@@ -97,16 +123,32 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         viewport.setZoom(viewport.zoom * gesture.scale, anchoredAt: gesture.location(in: self), documentSize: model.document.size)
         gesture.scale = 1; setNeedsDisplay()
     }
+    @objc private func rotateView(_ gesture: UIRotationGestureRecognizer) {
+        cancelInput(keepingPolygon: true)
+        viewport.setRotation(viewport.rotation + gesture.rotation, anchoredAt: gesture.location(in: self), documentSize: model.document.size)
+        gesture.rotation = 0; publishViewRotation(); setNeedsDisplay()
+    }
+    private func publishViewRotation() {
+        let degrees = Double(viewport.rotation * 180 / .pi)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, abs(Double(self.viewport.rotation * 180 / .pi) - degrees) < 0.0001,
+                  abs(self.model.viewportRotationDegrees - degrees) > 0.0001 else { return }
+            self.model.viewportRotationDegrees = degrees
+        }
+    }
     @objc private func undoTap() { cancelInput(); model.undo() }
     @objc private func redoTap() { cancelInput(); model.redo() }
-    @objc private func backgrounded() { cancelInput() }
+    @objc private func backgrounded() { cancelInput(); model.cancelTransform() }
     override func draw(_ rect: CGRect) {
         guard let context = UIGraphicsGetCurrentContext() else { return }
         backgroundColor?.setFill(); context.fill(bounds)
-        let canvas = viewport.documentRect(model.document.size)
-        context.saveGState(); context.clip(to: canvas)
+        let canvas = CGRect(origin: .zero, size: model.document.size)
+        let scale = max(0.0001, viewport.pointsPerPixel)
+        context.saveGState()
+        context.concatenate(viewport.documentToViewTransform(documentSize: model.document.size))
+        context.clip(to: canvas)
         context.setFillColor(UIColor.white.cgColor); context.fill(canvas)
-        let tile: CGFloat = 16
+        let tile: CGFloat = 16 / scale
         if canvas.width / tile < 200, canvas.height / tile < 200 {
             context.setFillColor(UIColor(white: 0.94, alpha: 1).cgColor)
             for y in 0...Int(canvas.height / tile) { for x in 0...Int(canvas.width / tile) where (x + y) % 2 == 0 {
@@ -114,7 +156,14 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             } }
         }
         var image = model.preview
-        if let strokeLayer, let strokeImage, !gestureTool.isSelection {
+        if let session = model.transformSession {
+            if let replacement = model.transformPreviewReplacement {
+                image = try? model.renderer.render(model.transformPreviewDocument, replacing: session.layerID,
+                    with: replacement.image, replacementMask: replacement.mask)
+            } else {
+                image = try? model.renderer.render(model.transformPreviewDocument)
+            }
+        } else if let strokeLayer, let strokeImage, !gestureTool.isSelection {
             image = try? model.renderer.render(model.document, replacing: strokeLayer.id, with: strokeImage)
         } else if let layer = strokeLayer, gestureTool == .move, startPoint != nil {
             var doc = model.document
@@ -125,41 +174,41 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             }
         }
         if let image { RasterImage.draw(image, in: canvas, context: context) }
-        let selection = gestureTool.isSelection && strokeImage != nil ? strokeImage : model.selectionPreview
+        let selection = gestureTool.isSelection && strokeImage != nil ? strokeImage : model.displayedSelectionPreview
         if let selection {
             context.saveGState(); RasterImage.clip(selection, to: canvas, context: context)
             context.setFillColor(UIColor.systemTeal.withAlphaComponent(0.28).cgColor); context.fill(canvas); context.restoreGState()
         }
         if let draft = selectionDraft {
-            context.setStrokeColor(UIColor.systemTeal.cgColor); context.setLineWidth(2); context.setLineDash(phase: 0, lengths: [6, 4])
+            context.setStrokeColor(UIColor.systemTeal.cgColor); context.setLineWidth(2 / scale); context.setLineDash(phase: 0, lengths: [6 / scale, 4 / scale])
             if (draft.kind == .rectangle || draft.kind == .ellipse), let rect = draft.rectangle {
-                let a = viewport.viewPoint(from: rect.origin, documentSize: model.document.size)
-                let box = CGRect(origin: a, size: CGSize(width: rect.width * viewport.pointsPerPixel, height: rect.height * viewport.pointsPerPixel))
-                if draft.kind == .ellipse { context.strokeEllipse(in: box) } else { context.stroke(box) }
+                if draft.kind == .ellipse { context.strokeEllipse(in: rect) } else { context.stroke(rect) }
             } else {
                 var points = draft.points
                 if draft.kind == .polygonal, let cursor = draft.cursor { points.append(cursor) }
-                let visible = points.map { viewport.viewPoint(from: $0, documentSize: model.document.size) }
+                let visible = points
                 if visible.count > 1 { context.addLines(between: visible); context.strokePath() }
                 if let first = visible.first, visible.count > 2 {
                     context.setStrokeColor(UIColor.systemTeal.withAlphaComponent(0.5).cgColor)
-                    context.setLineDash(phase: 0, lengths: [3, 5]); context.move(to: visible.last!); context.addLine(to: first); context.strokePath()
+                    context.setLineDash(phase: 0, lengths: [3 / scale, 5 / scale]); context.move(to: visible.last!); context.addLine(to: first); context.strokePath()
                 }
                 if draft.kind == .polygonal {
                     context.setLineDash(phase: 0, lengths: []); context.setFillColor(UIColor.systemTeal.cgColor)
-                    for point in draft.points.map({ viewport.viewPoint(from: $0, documentSize: model.document.size) }) {
-                        context.fillEllipse(in: CGRect(x: point.x - 3, y: point.y - 3, width: 6, height: 6))
+                    for point in draft.points {
+                        context.fillEllipse(in: CGRect(x: point.x - 3 / scale, y: point.y - 3 / scale, width: 6 / scale, height: 6 / scale))
                     }
                     if let first = draft.points.first {
-                        let point = viewport.viewPoint(from: first, documentSize: model.document.size)
-                        context.strokeEllipse(in: CGRect(x: point.x - 8, y: point.y - 8, width: 16, height: 16))
+                        context.strokeEllipse(in: CGRect(x: first.x - 8 / scale, y: first.y - 8 / scale, width: 16 / scale, height: 16 / scale))
                     }
                 }
             }
         }
         context.restoreGState()
-        if model.tool == .move, let layer = model.activeLayer {
-            let t = layer.transform
+        if let session = model.transformSession {
+            TransformOverlayGeometry(transform: session.current, viewport: viewport, documentSize: model.document.size).draw(in: context)
+        } else if model.tool == .move, let layer = model.activeLayer {
+            var t = layer.transform
+            if startPoint != nil { t.origin.x += moveDelta.x; t.origin.y += moveDelta.y }
             let corners = [CGPoint(x: 0,y: 0), CGPoint(x: 1,y: 0), CGPoint(x: 1,y: 1), CGPoint(x: 0,y: 1)]
                 .map { viewport.viewPoint(from: t.point($0), documentSize: model.document.size) }
             context.setStrokeColor(UIColor.systemTeal.cgColor); context.setLineWidth(1.5)
@@ -171,10 +220,17 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard inputTouch == nil, touches.count == 1, let touch = touches.first,
-              touch.type == .pencil || model.fingerDrawing else { return }
+              touch.type == .pencil || model.fingerDrawing || model.tool == .transform else { return }
         if let draft = selectionDraft, !draft.matches(documentID: model.document.id, revision: model.document.revision, kind: selectionKind(model.tool)) { cancelInput() }
         inputTouch = touch; gestureTool = model.tool; strokeRevision = model.document.revision; strokeDocumentID = model.document.id
         let point = documentPoint(touch)
+        if gestureTool == .transform {
+            guard let session = model.transformSession,
+                  let handle = TransformOverlayGeometry(transform: session.current, viewport: viewport, documentSize: model.document.size)
+                    .hit(touch.location(in: self), documentPoint: point, transform: session.current) else { cancelInput(); return }
+            beginTransformDrag(handle: handle, start: point)
+            return
+        }
         guard CGRect(origin: .zero, size: model.document.size).contains(point) else { cancelInput(keepingPolygon: true); return }
         startPoint = point
         do {
@@ -208,7 +264,11 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         guard let touch = inputTouch, touches.contains(touch), let startPoint else { return }
         guard inputIsCurrent else { cancelInput(); return }
         let point = documentPoint(touch)
-        if gestureTool == .move { moveDelta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y) }
+        if gestureTool == .transform {
+            if let id = transformSessionID, let next = transformDrag?.updated(to: point) {
+                if !model.previewTransform(next, sessionID: id) { cancelInput() }
+            }
+        } else if gestureTool == .move { moveDelta = CGPoint(x: point.x - startPoint.x, y: point.y - startPoint.y) }
         else if selectionKind(gestureTool) != nil {
             for sample in event?.coalescedTouches(for: touch) ?? [touch] { selectionDraft?.move(to: documentPoint(sample)) }
         } else if gestureTool == .eyedropper { sampleColor(point) }
@@ -217,6 +277,11 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = inputTouch, touches.contains(touch) else { return }
+        if gestureTool == .transform {
+            if inputIsCurrent { touchesMoved(touches, with: nil) }
+            cancelInput(keepingTransformPreview: inputIsCurrent)
+            return
+        }
         if selectionKind(gestureTool) != nil {
             guard inputIsCurrent, var draft = selectionDraft else { cancelInput(); return }
             let shape = draft.end(at: documentPoint(touch), closingDistance: 12 / max(0.0001, viewport.pointsPerPixel))
@@ -281,7 +346,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             if let layer = strokeLayer { point = point.applying(model.renderer.pixelToDocument(layer, size: stroke.size).inverted()) }
             let pressure = sample.type == .pencil && sample.maximumPossibleForce > 0 ? min(1, max(0.05, sample.force / sample.maximumPossibleForce)) : 1
             stroke.add(BrushSample(point: point, pressure: pressure, altitude: sample.type == .pencil ? sample.altitudeAngle : .pi / 2,
-                                   azimuth: sample.type == .pencil ? sample.azimuthAngle(in: self) : 0))
+                                   azimuth: sample.type == .pencil ? sample.azimuthAngle(in: self) - viewport.rotation : 0))
         }
         do { strokeImage = try stroke.image(); setNeedsDisplay() } catch { model.errorMessage = error.localizedDescription; cancelInput() }
     }
@@ -295,12 +360,39 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             model.color = Color(red: Double(CGFloat(bytes[0]) / alpha), green: Double(CGFloat(bytes[1]) / alpha), blue: Double(CGFloat(bytes[2]) / alpha))
         }
     }
-    private func cancelInput(keepingPolygon: Bool = false) {
+    /// Start from the previous completed preview; cancelling this pointer must only undo this drag.
+    func beginTransformDrag(handle: TransformHandle, start: CGPoint) {
+        guard let session = model.transformSession else { return }
+        transformInputID = UUID()
+        transformSessionID = session.id
+        transformDrag = FreeTransformGesture(transform: session.current, handle: handle, start: start,
+                                             lockAspect: model.transformAspectLocked)
+        startPoint = start
+    }
+
+    func cancelInput(keepingPolygon: Bool = false, keepingTransformPreview: Bool = false) {
+        let cancelledDrag = keepingTransformPreview ? nil : transformDrag
+        let cancelledSessionID = transformSessionID
+        let cancelledInputID = transformInputID
+        let cancelledPreview = model.transformSession?.current
         if keepingPolygon, selectionDraft?.kind == .polygonal, selectionDraft?.points.isEmpty == false {
             selectionDraft?.cancelPointer()
         } else { selectionDraft = nil }
         stroke = nil; strokeLayer = nil; strokeImage = nil; startPoint = nil
         inputTouch = nil; strokeDocumentID = nil; moveDelta = .zero; setNeedsDisplay()
+        transformDrag = nil; transformSessionID = nil
         publishDraftCount()
+        guard let cancelledDrag, let cancelledSessionID, let cancelledPreview,
+              cancelledPreview != cancelledDrag.original else { return }
+        let restorePreview = { [weak self] in
+            guard let self, self.transformInputID == cancelledInputID,
+                  self.model.transformSession?.id == cancelledSessionID,
+                  self.model.transformSession?.current == cancelledPreview else { return }
+            _ = self.model.previewTransform(cancelledDrag.original, sessionID: cancelledSessionID)
+        }
+        // updateUIView must not publish synchronously. A later session, preview or pointer owns
+        // its state, so a queued cancellation checks all three before restoring anything.
+        if isUpdatingView { DispatchQueue.main.async(execute: restorePreview) }
+        else { restorePreview() }
     }
 }

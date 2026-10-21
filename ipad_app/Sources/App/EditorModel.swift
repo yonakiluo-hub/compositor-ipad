@@ -5,7 +5,13 @@ import UniformTypeIdentifiers
 @MainActor
 final class EditorModel: ObservableObject {
     @Published private(set) var editor: DocumentEditor
-    @Published var tool: PadTool = .brush
+    @Published var tool: PadTool = .brush {
+        didSet {
+            if tool != .transform, transformSession != nil { transformSession = nil }
+        }
+    }
+    @Published var transformSession: LayerTransformSession?
+    @Published var transformAspectLocked = true
     @Published var color: Color = Color(red: 0.18, green: 0.22, blue: 0.28)
     @Published var diameter: Double = 28
     @Published var hardness: Double = 0.8
@@ -21,6 +27,8 @@ final class EditorModel: ObservableObject {
     @Published var selectionGestureCommand: SelectionGestureCommand?
     @Published var selectionDraftPointCount = 0
     @Published var viewportReset = 0
+    @Published var viewportRotationReset = 0
+    @Published var viewportRotationDegrees: Double = 0
     @Published var pairing: BridgePairing?
     @Published var capabilities: BridgeCapabilities?
     @Published var jobs: [BridgeJob] = []
@@ -94,6 +102,7 @@ final class EditorModel: ObservableObject {
         do { try operation() } catch { errorMessage = error.localizedDescription }
     }
     func edit(_ name: String, _ operation: (inout CanvasDocument) throws -> Void) {
+        cancelTransform()
         report { try editor.transaction(name, operation); changed() }
     }
     func updateLayer(_ name: String, _ update: (inout RasterLayer) -> Void) {
@@ -104,11 +113,12 @@ final class EditorModel: ObservableObject {
         }
     }
     func select(_ layer: RasterLayer) {
+        if document.activeLayerID != layer.id { cancelTransform() }
         report { try editor.selectLayer(layer.id); objectWillChange.send(); scheduleSave() }
     }
-    func undo() { report { try editor.undo(); changed() } }
-    func redo() { report { try editor.redo(); changed() } }
-    func changed() { refresh(); scheduleSave() }
+    func undo() { cancelTransform(); report { try editor.undo(); changed() } }
+    func redo() { cancelTransform(); report { try editor.redo(); changed() } }
+    func changed() { cancelTransform(); refresh(); scheduleSave() }
     func refresh() {
         objectWillChange.send()
         report {
@@ -140,6 +150,7 @@ final class EditorModel: ObservableObject {
             .filter { $0.pathExtension == "comp" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
     func open(_ url: URL) {
+        cancelTransform()
         saveNow(); guard !saveFailed else { return }
         report {
             let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -152,6 +163,7 @@ final class EditorModel: ObservableObject {
         }
     }
     func create(name: String, width: Int, height: Int) {
+        cancelTransform()
         saveNow(); guard !saveFailed else { return }
         report {
             _ = try RasterImage.context(width: width, height: height)
@@ -174,9 +186,10 @@ final class EditorModel: ObservableObject {
     func toggleLock(_ id: UUID) {
         edit("图层锁定") { document in if let i = document.layers.firstIndex(where: { $0.id == id }) { document.layers[i].isLocked.toggle() } }
     }
-    func duplicate() { guard let id = document.activeLayerID else { return }; report { _ = try editor.duplicateLayer(id); changed() } }
-    func deleteLayer() { guard let id = document.activeLayerID else { return }; report { try editor.deleteLayer(id); changed() } }
+    func duplicate() { cancelTransform(); guard let id = document.activeLayerID else { return }; report { _ = try editor.duplicateLayer(id); changed() } }
+    func deleteLayer() { cancelTransform(); guard let id = document.activeLayerID else { return }; report { try editor.deleteLayer(id); changed() } }
     func moveLayer(_ delta: Int) {
+        cancelTransform()
         guard let id = document.activeLayerID else { return }
         report { try editor.reorderLayer(id, offset: delta); changed() }
     }
@@ -276,6 +289,7 @@ final class EditorModel: ObservableObject {
     }
     func rename(_ name: String) { if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { edit("重命名文稿") { $0.name = name } } }
     func resizeCanvas(width: Int, height: Int, resample: Bool) {
+        cancelTransform()
         report {
             try editor.transaction(resample ? "图像大小" : "画布大小") { document in
                 try renderer.resizeCanvas(&document, width: width, height: height, resample: resample)
@@ -287,11 +301,12 @@ final class EditorModel: ObservableObject {
 }
 
 enum PadTool: String, CaseIterable, Identifiable {
-    case brush = "画笔", eraser = "橡皮", move = "移动", mask = "选区笔", maskErase = "减选", rectangle = "矩形选区", ellipse = "椭圆选区", lasso = "自由套索", polygonLasso = "多边形套索", eyedropper = "吸色"
+    case brush = "画笔", eraser = "橡皮", move = "移动", transform = "自由变换", mask = "选区笔", maskErase = "减选", rectangle = "矩形选区", ellipse = "椭圆选区", lasso = "自由套索", polygonLasso = "多边形套索", eyedropper = "吸色"
     var id: String { rawValue }
     var symbol: String {
         switch self {
         case .brush: "paintbrush.pointed"; case .eraser: "eraser"; case .move: "arrow.up.and.down.and.arrow.left.and.right"
+        case .transform: "arrow.up.left.and.arrow.down.right"
         case .mask: "paintbrush.pointed.fill"; case .maskErase: "minus.circle"; case .rectangle: "rectangle.dashed"
         case .ellipse: "circle.dashed"; case .lasso: "lasso"; case .polygonLasso: "pentagon"; case .eyedropper: "eyedropper"
         }

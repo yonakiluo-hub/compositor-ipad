@@ -3,6 +3,11 @@ import CoreGraphics
 import CoreImage
 
 final class DocumentRenderer {
+    private enum MaskReplacement {
+        case original
+        case replacement(CGImage?)
+    }
+
     private var images: [UUID: (Data, CGImage)] = [:]
     private var masks: [UUID: (Data, CGImage)] = [:]
     private let ciContext = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
@@ -36,6 +41,20 @@ final class DocumentRenderer {
         return context.makeImage()
     }
     func render(_ document: CanvasDocument, replacing layerID: UUID? = nil, with replacement: CGImage? = nil) throws -> CGImage {
+        try render(document, replacing: layerID, with: replacement, maskReplacement: .original)
+    }
+
+    /// An explicit mask replacement belongs to the temporary image's geometry.
+    /// Passing nil here removes the mask for this preview; omitting this argument
+    /// uses the original mask through the overload above. The temporary mask
+    /// never enters the original layer's decoded mask cache.
+    func render(_ document: CanvasDocument, replacing layerID: UUID, with replacement: CGImage,
+                replacementMask: CGImage?) throws -> CGImage {
+        try render(document, replacing: layerID, with: replacement, maskReplacement: .replacement(replacementMask))
+    }
+
+    private func render(_ document: CanvasDocument, replacing layerID: UUID?, with replacement: CGImage?,
+                        maskReplacement: MaskReplacement) throws -> CGImage {
         let context = try RasterImage.context(width: document.width, height: document.height)
         for entry in document.renderLayers {
             let layer = entry.layer
@@ -43,7 +62,8 @@ final class DocumentRenderer {
             context.saveGState()
             context.setAlpha(entry.effectiveOpacity)
             context.setBlendMode(layer.blendMode.cgMode)
-            try drawLayer(layer, image: image, context: context)
+            try drawLayer(layer, image: image, context: context,
+                          maskReplacement: layer.id == layerID ? maskReplacement : .original)
             context.restoreGState()
         }
         let ids = Set(document.layers.map(\.id))
@@ -52,6 +72,11 @@ final class DocumentRenderer {
         return image
     }
     func drawLayer(_ layer: RasterLayer, image: CGImage, context: CGContext) throws {
+        try drawLayer(layer, image: image, context: context, maskReplacement: .original)
+    }
+
+    private func drawLayer(_ layer: RasterLayer, image: CGImage, context: CGContext,
+                           maskReplacement: MaskReplacement) throws {
         let transform = layer.transform
         context.translateBy(x: transform.center.x, y: transform.center.y)
         context.rotate(by: transform.radians)
@@ -59,11 +84,22 @@ final class DocumentRenderer {
         let rect = CGRect(x: -transform.size.width / 2, y: -transform.size.height / 2,
                           width: transform.size.width, height: transform.size.height)
         context.interpolationQuality = transform.sampling.quality
-        if layer.maskEnabled, let data = layer.maskPNGData {
-            let mask: CGImage
-            if let hit = masks[layer.id], hit.0 == data { mask = hit.1 }
-            else { mask = try RasterImage.decode(data); masks[layer.id] = (data, mask) }
-            RasterImage.clip(mask, to: rect, context: context)
+        if layer.maskEnabled {
+            let mask: CGImage?
+            switch maskReplacement {
+            case .replacement(let replacement):
+                mask = replacement
+            case .original:
+                if let data = layer.maskPNGData {
+                    if let hit = masks[layer.id], hit.0 == data { mask = hit.1 }
+                    else {
+                        let decoded = try RasterImage.decode(data)
+                        masks[layer.id] = (data, decoded)
+                        mask = decoded
+                    }
+                } else { mask = nil }
+            }
+            if let mask { RasterImage.clip(mask, to: rect, context: context) }
         }
         RasterImage.draw(image, in: rect, context: context)
     }
