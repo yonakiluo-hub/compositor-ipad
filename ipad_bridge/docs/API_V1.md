@@ -37,7 +37,7 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
 | --- | --- |
 | `GET /health` | `status`、`service`、`version`、`protocolVersion`；正常 200，worker 异常时 503。此接口存活不等于 ComfyUI 可用 |
 | `GET /v1/capabilities` | 当前后端、预设、输入限制、结果透明度约定 |
-| `GET /v1/backend/status` | 当前后端检查；真实后端检查节点和模型，不能把它当成生成效果验证 |
+| `GET /v1/backend/status?presetId=…` | 检查指定预设；省略参数检查默认预设。真实后端检查节点和模型，不能把它当成生成效果验证 |
 | `GET /v1/openapi.json` | 需认证的 OpenAPI；复杂 metadata 字符串的约束仍以本文为准 |
 
 真实后端能力响应示例：
@@ -47,12 +47,20 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
   "protocolVersion": 1,
   "backend": "comfyui",
   "isSimulation": false,
+  "defaultPreset": "paint-edit-v1",
   "presets": [{
     "id": "paint-edit-v1",
+    "presetVersion": "1.0.0",
+    "default": true,
+    "experimental": false,
+    "enabled": true,
+    "configured": true,
     "technique": "reference_edit_with_output_mask",
     "nativeInpainting": false,
     "maskAppliedToOutput": true
   }],
+  "maxPendingJobs": 8,
+  "maxPendingBytes": 268435456,
   "maxInputPixels": 4194304,
   "maxImageBytes": 20971520,
   "minInputSide": 16,
@@ -67,11 +75,21 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
 }
 ```
 
+示例省略了预设的详细描述字段与实验预设。真实后端使用服务端白名单 registry；`paint-edit-v1` 始终排在 `presets[0]`，兼容已有客户端默认选择逻辑。新增的 `defaultPreset` 是默认 ID。列表可以包含禁用或配置损坏的预设，不能把“出现在列表”视为可生成。
+
+每个真实预设可带 `name`、`description`、`presetVersion`、`graphHash`、`experimental`、`enabled`、`configured`、`error`、`license`、`precision`、`scenarios`、`inputRoles`、`controls`、`limits`、`dependencies` 和 `qualification`。`enabled` 表示开关允许，`configured` 表示预设配置及固定图摘要通过检查；两者均不证明本机已经装好模型。`controls` 中 `editable=false` 的设置是固定组合，不能由客户端另传同名 metadata 字段。
+
+`qualification` 分别记录 `installed`、`structuralPreflight`、`gpuSmoke`、`qualityAdmission`。能力目录的前两项为 `not_checked`，GPU 为 `not_checked`，美术质量为 `pending`；这是明确的未验证状态。客户端应请求所选预设的 backend/status 获取当前依赖检查，不把能力目录、一次结构检查或曾经生成成功提升为质量准入。未识别的响应扩展字段应忽略；请求 metadata 仍严格拒绝未知字段。
+
 `mock` 后端只提供 `mock-paint-v1`，`isSimulation=true`，`technique=simulation`，最短边为 1、长宽比限制为 `null`。它返回确定性的染色测试图，不执行 AI；界面必须明确显示模拟模式。不要把真实预设交给模拟后端，或在生成失败时静默切换模拟。
 
 `paint-edit-v1` 使用本地 FLUX.2 Klein 4B 做参考图语义编辑，约 1 MP、4 步，再恢复输入裁切尺寸。模型不接收蒙版；服务最后将蒙版应用到结果透明度。这不是原生蒙版 inpainting，位置与边缘效果需要用户审阅。
 
-真实 `/v1/backend/status` 返回 `ok`、`presetId`、`technique`、`missingNodes`、`missingModels`、`invalidInputs`、`backend`、`isSimulation`。缺节点或模型时可能是 HTTP 200 且 `ok=false`；不可连接时返回 503 与 `error`。客户端必须检查 `ok`，不能只检查 HTTP 状态。
+真实 `/v1/backend/status` 返回 `ok`、`presetId`、`technique`、`missingNodes`、`missingModels`、`invalidInputs`、`backend`、`isSimulation`，新增 `installed`、`structuralPreflight`、`gpuSmoke`、`qualityAdmission`、`dependencyIdentityConfigured` 与 `executorHeld`。前两项是本次预检布尔值，`gpuSmoke=unverified`、`qualityAdmission=pending` 不会因预检通过变成通过。`dependencyIdentityConfigured` 只表示已配置本机模型和安装路径，入队仍需核对实际运行实例、权重及源码摘要。`executorHeld=true` 表示有尚未释放的推理占用记录，可能已在 GPU 完成但尚未由后续调度确认释放。
+
+当占用记录绑定的 ComfyUI endpoint 与当前连接不一致，或旧记录没有绑定地址时，状态接口直接返回 HTTP 200、`ok=false`、`executorHeld=true` 及 `error.code=executor_connection_mismatch`；此时不访问当前实例进行预检，不返回原始连接地址，也可能省略结构预检字段。恢复原连接或在 Windows 完成明确的人工恢复后再检查。仅新实例空闲不能证明原实例已停止执行。
+
+缺节点或模型时可能是 HTTP 200 且 `ok=false`；不可连接、未知或禁用预设返回 503 与 `error`。客户端必须检查 `ok`，不能只检查 HTTP 状态。缺少某个实验预设的依赖不会使其他预设自动不可用。实验 `qwen21-edit-v1` 与 `qwen21-turbo-edit-v1` 默认关闭，需要 Windows 明确开启；两者仅供研究或评估，商业使用需另获模型许可。当前固定组合、部署及 Mac 选择器交接见 [Windows v0.2](../../docs/WINDOWS_PRESETS_V02.md)。
 
 ## 创建绘画任务
 
@@ -116,10 +134,18 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
 - `cropRect` 只能有 `x`、`y`、`width`、`height`；必须完全位于画布内。单位是文档像素，左上角原点，与屏幕 points、缩放和设备像素无关。
 - 首版要求 `inputSize == cropRect` 的宽高，两张 PNG 的实际尺寸也必须相等；不接受客户端另行缩小上传。裁切像素总量最多 `4194304`。
 - `colorSpace` 固定 `sRGB`，`maskConvention` 固定 `white_edit_black_preserve`。
-- `workflowPreset` 必须匹配当前服务 `capabilities.presets`。
+- 新任务的 `workflowPreset` 必须是当前服务允许的预设；真实后端同时检查 `enabled`、图摘要、依赖与该预设的 `limits`。客户端应采用全局限制与所选预设限制中较严格的一项。旧请求重放仍使用当时接受的记录，不因当前预设被关闭或移除而重新解释。
 - `prompt` 最多 4000 个字符，必须是有效 Unicode；真实后端不可为空或全空白。metadata 表单字段的 UTF-8 编码长度最多 16384 字节。
 
 新任务返回 **202**，相同任务重试返回 **200**。两者都是同一结构，见下一节。`clientRequestId` 在整套服务中唯一，创建前应在 iPad 持久保存。相同 ID、相同 metadata 内容和相同原始图片/蒙版字节返回原 `jobId`；相同 ID 对应不同内容返回 **409** `request_conflict`。重试时不要重新编码 PNG，即使肉眼看起来相同也可能得到不同字节。用户主动要求新的生成时才分配新请求 ID。
+
+多预设不增加请求字段：仍只上传一张 image、一张 mask，返回单个 `results/0`。没有多参考、候选数、用户工作流 JSON、模型文件路径或下载 URL 参数。蒙版是 `compositeMask`，所有当前预设均在输出 alpha 应用一次，不把它伪装为原生模型条件。
+
+真实任务入队前冻结预设版本、图及摘要、固定参数、seed、输入角色和几何、规范化输入摘要、权重 SHA-256，以及受控 ComfyUI 源码和运行依赖证据。排队后不再读取新版图来替代旧任务；依赖或输入改变会明确失败，不静默换模型、降低参数或换种子。响应可增加 `execution={"presetVersion":"…","graphHash":"…","dependencyFingerprint":"…"}`，仅用于溯源，不公开工作流、输入内容或本机路径。
+
+私人执行快照另冻结 `comfyOrigin`，它不属于请求 metadata 或公开 `execution` 字段。连接地址变更后，旧未提交任务以 `backend_changed` 失败，旧已提交任务保留状态等待原连接恢复；不会把旧 prompt ID 交给另一个实例查询或执行。
+
+默认最多 8 个排队/运行任务，规范化的 image 与 mask 合计最多 256 MiB。超过任一限制返回 **429** `queue_full` 和 `Retry-After: 5`；保持同一请求 ID 与原始字节稍后重试。容量限制先核对已存在请求，因此队列已满、ComfyUI 离线或预设被移除时，相同请求仍返回原任务。容量限制不是整个缓存目录的磁盘配额，终态缓存仍需通过删除接口清理。
 
 ## 查询、断线恢复与结果
 
@@ -180,6 +206,10 @@ iPad 端还需要本地网络访问用途说明和实际权限测试；按当前
 
 iPad 将 `clientRequestId`、`jobId` 和提交快照保存到本地。锁屏、断线或进程重开后查询原任务；Windows 继续执行并保存结果。桥接会从 ComfyUI 队列/历史恢复提交 ID，结果未知时不会自动再次提交。`submission_unknown`、`task_not_found` 或 `job_timeout` 失败不代表 GPU 一定从未执行；先核对 Windows 状态，再由用户决定是否新建请求。ComfyUI 自身重启或清空历史会限制恢复能力，不承诺严格“一次执行”。
 
+桥接在提交前持久记录推理占用。超时、任务失败或删除终态缓存不自动释放该占用；后续任务须确认 ComfyUI 队列已空闲。提交结果未知且没有 prompt ID 时，仅看到空队列仍不足以证明请求没有在途，需先从队列或历史找回对应提交；无法找回时保持阻塞，交给 Windows 端检查。迟到的结果或失败回调不能覆盖已确定的任务终态，也不能复活墓碑。没有新增取消或强制清空占用的 HTTP 接口。
+
+占用绑定原 ComfyUI endpoint，跨重启和终态删除仍保留。当前连接与绑定地址不一致，或旧记录地址未知时，自动对账保持阻塞；不能把新连接的空队列当作释放证据。人工恢复工具要求先停止桥接并明确确认原 ComfyUI 实例已完成重启；绑定过地址的记录还必须使用匹配的地址，旧未知地址记录也不能省略人工确认。
+
 ## 删除不需要的候选
 
 删除是 API v1 的可选扩展：仅在 `capabilities.jobDeletionSupported == true` 时调用；旧服务缺少此字段时视为不支持远端删除。此能力不改变 `cancelSupported=false`。删除按一次生成任务执行，包含其全部结果；当前预设通常每次返回一个结果。客户端可另行移除本机候选，但应说明旧服务仍保留远端文件。仅本机移除的候选可以重新显示并按需下载，前提是服务仍保留结果；这不能恢复已经远端删除的文件。
@@ -193,6 +223,8 @@ iPad 将 `clientRequestId`、`jobId` 和提交快照保存到本地。锁屏、�
 `queued`、`running` 返回 **409** `job_not_finished`，任务继续运行，不会被取消。未知任务返回 **404**。重复删除已删除的任务仍返回相同的 **200** 回执。
 
 删除清理桥接数据目录中该任务的输入图、蒙版、工作流与结果；已保存的 `.comp` 工程备份不受影响，已经回填进工程的图层也不受影响。ComfyUI 自己的 input/output 目录不在本接口的清理范围内，不能把此操作描述成清空所有生成占用。
+
+冻结执行快照中的提示词、图及依赖详情也会清除。如果这个终态任务仍可能在 ComfyUI 执行，另行保留最小的任务 ID、prompt ID、原 ComfyUI endpoint、时间与原因作为私人调度占用记录；它不包含画稿或完整 metadata，地址不通过 API 返回。删除成功不等于 GPU 已空闲，更不等于取消。
 
 服务先持久记录最小删除标记，再清理文件。删除标记保留任务 ID、原 `clientRequestId`、请求摘要及必要的状态信息，不保留完整 metadata、提示词或图片。已删任务不会出现在任务列表或待执行队列中；查询任务、下载结果或以原 `clientRequestId` 再次提交均返回 **410** `job_deleted`，不能自动重新生成。用户主动生成新候选时使用新的 `clientRequestId`。
 
@@ -232,9 +264,12 @@ HTTP 错误统一形如 `{"error":{"code":"…","message":"…"}}`；字段验�
 | 411 | `length_required`：没有合法 Content-Length |
 | 413 | 请求或单个文件过大 |
 | 422 | metadata、图像、蒙版或归档无效 |
-| 503 | worker 不可用、ComfyUI 暂不可达，或 `job_deletion_incomplete`：文件清理需重试 |
+| 429 | `queue_full`：排队数量或待处理输入字节预算已满，保留原请求稍后重试 |
+| 503 | worker 不可用、ComfyUI 暂不可达、选中预设禁用或缺依赖，或 `job_deletion_incomplete`：文件清理需重试 |
 
 创建成功后发生的生成失败记录在 job 的 `error` 中，`GET /v1/jobs/{id}` 仍返回 200。客户端分别处理 HTTP 失败和任务状态失败，避免永久转圈。
+
+新增错误包括 `dependency_identity_unavailable`、`runtime_identity_unavailable`、`dependency_changed`、`input_changed`、`legacy_snapshot_missing` 和 `execution_contract_unsupported`。旧数据库中尚未提交、没有执行快照的 GPU 任务不会套用新配置重新生成；已记录提交过程或 prompt ID 的旧任务继续按原 ID 对账。OOM 明确失败，不自动切模型或缩图。升级前应完成旧队列，详见 [升级与回退](../../docs/WINDOWS_PRESETS_V02.md#升级与回退)。
 
 ## 可直接运行的联调客户端
 

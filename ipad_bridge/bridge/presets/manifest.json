@@ -3,6 +3,10 @@
   "presets": [
     {
       "id": "paint-edit-v1",
+      "presetVersion": "1.0.0",
+      "graphHash": "da5ad7e451953f11a5eedd4f64b793c78c9f08c07dd30f5bd1eb9c2d1c583ec9",
+      "experimental": false,
+      "enabled": true,
       "name": "FLUX.2 Klein 4B reference edit",
       "description": "Edits the supplied crop using a text instruction and image reference. The worker applies the original grayscale mask as output alpha after download. The diffusion model does not receive the mask; this is not native masked inpainting.",
       "technique": "reference_image_edit_then_masked_alpha",
@@ -14,13 +18,379 @@
       "maximumAspectRatio": 16,
       "steps": 4,
       "customNodesRequired": false,
+      "precision": {
+        "diffusion": "FP8",
+        "textEncoder": "artifact_defined",
+        "vae": "artifact_defined"
+      },
+      "license": {
+        "id": "Apache-2.0",
+        "scope": "FLUX.2 Klein 4B model; other dependency licenses must also be observed",
+        "url": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/blob/main/LICENSE.md",
+        "commercialUse": "permitted_subject_to_license"
+      },
+      "scenarios": [
+        "lineart-colorization",
+        "sketch-refinement",
+        "local-repair",
+        "value-lighting-design"
+      ],
+      "inputRoles": [
+        {
+          "role": "sourceImage",
+          "count": 1,
+          "format": "sRGB RGBA8 PNG",
+          "sentToModel": true
+        },
+        {
+          "role": "compositeMask",
+          "count": 1,
+          "format": "L8 PNG",
+          "sentToModel": false,
+          "application": "output_alpha_once"
+        }
+      ],
+      "controls": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "steps": {
+          "value": 4,
+          "editable": false
+        },
+        "cfg": {
+          "value": 1.0,
+          "editable": false
+        }
+      },
+      "limits": {
+        "minimumInputSide": 16,
+        "maximumAspectRatio": 16,
+        "maxInputPixels": 4194304,
+        "modelMegapixels": 1.0,
+        "maxImages": 1,
+        "maxResults": 1
+      },
+      "dependencies": [
+        {
+          "node": "4",
+          "input": "unet_name",
+          "loader": "UNETLoader",
+          "category": "diffusion_models",
+          "filename": "flux-2-klein-4b-fp8.safetensors",
+          "revision": null,
+          "sha256": null
+        },
+        {
+          "node": "5",
+          "input": "clip_name",
+          "loader": "CLIPLoader",
+          "category": "text_encoders",
+          "filename": "qwen_3_4b.safetensors",
+          "revision": null,
+          "sha256": null
+        },
+        {
+          "node": "6",
+          "input": "vae_name",
+          "loader": "VAELoader",
+          "category": "vae",
+          "filename": "flux2-vae.safetensors",
+          "revision": null,
+          "sha256": null
+        }
+      ],
       "source": "API graph adapted from Comfy Org's official image_flux2_klein_image_edit_4b_distilled.json workflow template: https://github.com/Comfy-Org/workflow_templates/blob/main/templates/image_flux2_klein_image_edit_4b_distilled.json (MIT; see repository THIRD_PARTY_NOTICES.md).",
       "bindings": {
-        "image": {"node": "1", "input": "image"},
-        "prompt": {"node": "7", "input": "text"},
-        "seed": {"node": "15", "input": "noise_seed"},
-        "outputPrefix": {"node": "23", "input": "filename_prefix"}
+        "image": {
+          "node": "1",
+          "input": "image"
+        },
+        "prompt": {
+          "node": "7",
+          "input": "text"
+        },
+        "seed": {
+          "node": "15",
+          "input": "noise_seed"
+        },
+        "outputPrefix": {
+          "node": "23",
+          "input": "filename_prefix"
+        }
       }
+    },
+    {
+      "id": "qwen21-edit-v1",
+      "presetVersion": "1.0.0",
+      "name": "Qwen-Image-2.1 25-step reference edit (experimental)",
+      "description": "Research evaluation only. Single reference image edit followed by the original composite mask as alpha; not native masked inpainting. Qwen source alpha is retained. Quality admission pending.",
+      "technique": "reference_image_edit_then_masked_alpha",
+      "graph": "qwen21-edit-v1.json",
+      "graphHash": "5fb3e36df5aef119811b55a6f51c54330525a76b9f339013bd00e9f3d8f6aa2e",
+      "experimental": true,
+      "inputRoles": [
+        {
+          "role": "sourceImage",
+          "count": 1,
+          "format": "sRGB RGBA8 PNG",
+          "sentToModel": true
+        },
+        {
+          "role": "compositeMask",
+          "count": 1,
+          "format": "L8 PNG",
+          "sentToModel": false,
+          "application": "output_alpha_once"
+        }
+      ],
+      "scenarios": [
+        "lineart-colorization",
+        "sketch-refinement",
+        "local-repair",
+        "value-lighting-design"
+      ],
+      "controls": {
+        "prompt": {
+          "type": "string",
+          "maxLength": 4000,
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "steps": {
+          "value": 25,
+          "editable": false
+        },
+        "cfg": {
+          "value": 1.0,
+          "editable": false
+        },
+        "referenceResolution": {
+          "value": 0,
+          "editable": false
+        }
+      },
+      "limits": {
+        "maxInputPixels": 1048576,
+        "minimumInputSide": 32,
+        "maximumAspectRatio": 4,
+        "maxImages": 1,
+        "maxResults": 1
+      },
+      "minimumInputSide": 32,
+      "maximumAspectRatio": 4,
+      "steps": 25,
+      "customNodesRequired": false,
+      "precision": {
+        "diffusion": "int8_convrot",
+        "textEncoder": "int8_convrot",
+        "vae": "bf16",
+        "adapter": null,
+        "kvCache": "default"
+      },
+      "license": {
+        "id": "qwen-research",
+        "url": "https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE",
+        "use": "research_or_evaluation_only",
+        "commercialLicenseRequired": true
+      },
+      "dependencies": [
+        {
+          "node": "4",
+          "input": "unet_name",
+          "loader": "UNETLoader",
+          "category": "diffusion_models",
+          "filename": "qwen_image_2.1_int8_convrot.safetensors",
+          "revision": null,
+          "sha256": null
+        },
+        {
+          "node": "5",
+          "input": "clip_name",
+          "loader": "CLIPLoader",
+          "category": "text_encoders",
+          "filename": "qwen3vl_8b_int8_convrot.safetensors",
+          "revision": null,
+          "sha256": null
+        },
+        {
+          "node": "6",
+          "input": "vae_name",
+          "loader": "VAELoader",
+          "category": "vae",
+          "filename": "qwen_image_2.1_vae_bf16.safetensors",
+          "revision": null,
+          "sha256": null
+        }
+      ],
+      "source": "Adapted from Comfy-Org/workflow_templates @ d0e41fe5423f93db5b5872cf273d7b1af8aa68bc, image_qwen_image_2_1_image_edit.json; Turbo LoRA path is recommended by Comfy-Org/Qwen-Image-2.1 model card. See docs/QWEN_EXPERIMENT.md.",
+      "bindings": {
+        "image": {
+          "node": "1",
+          "input": "image"
+        },
+        "prompt": {
+          "node": "7",
+          "input": "prompt"
+        },
+        "seed": {
+          "node": "9",
+          "input": "seed"
+        },
+        "outputPrefix": {
+          "node": "12",
+          "input": "filename_prefix"
+        }
+      },
+      "enabled": true
+    },
+    {
+      "id": "qwen21-turbo-edit-v1",
+      "presetVersion": "1.0.0",
+      "name": "Qwen-Image-2.1 Turbo LoRA 8-step reference edit (experimental)",
+      "description": "Research evaluation only. Single reference image edit followed by the original composite mask as alpha; not native masked inpainting. Qwen source alpha is retained. Quality admission pending.",
+      "technique": "reference_image_edit_then_masked_alpha",
+      "graph": "qwen21-turbo-edit-v1.json",
+      "graphHash": "d045d4490a90d305a1688cdb96db0ba72fb7d0ddccae730eb70b86f24d3ef7cd",
+      "experimental": true,
+      "inputRoles": [
+        {
+          "role": "sourceImage",
+          "count": 1,
+          "format": "sRGB RGBA8 PNG",
+          "sentToModel": true
+        },
+        {
+          "role": "compositeMask",
+          "count": 1,
+          "format": "L8 PNG",
+          "sentToModel": false,
+          "application": "output_alpha_once"
+        }
+      ],
+      "scenarios": [
+        "lineart-colorization",
+        "sketch-refinement",
+        "local-repair",
+        "value-lighting-design"
+      ],
+      "controls": {
+        "prompt": {
+          "type": "string",
+          "maxLength": 4000,
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "steps": {
+          "value": 8,
+          "editable": false
+        },
+        "cfg": {
+          "value": 1.0,
+          "editable": false
+        },
+        "referenceResolution": {
+          "value": 0,
+          "editable": false
+        }
+      },
+      "limits": {
+        "maxInputPixels": 1048576,
+        "minimumInputSide": 32,
+        "maximumAspectRatio": 4,
+        "maxImages": 1,
+        "maxResults": 1
+      },
+      "minimumInputSide": 32,
+      "maximumAspectRatio": 4,
+      "steps": 8,
+      "customNodesRequired": false,
+      "precision": {
+        "diffusion": "int8_convrot",
+        "textEncoder": "int8_convrot",
+        "vae": "bf16",
+        "adapter": "bf16",
+        "kvCache": "default"
+      },
+      "license": {
+        "id": "qwen-research",
+        "url": "https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/LICENSE",
+        "use": "research_or_evaluation_only",
+        "commercialLicenseRequired": true
+      },
+      "dependencies": [
+        {
+          "node": "4",
+          "input": "unet_name",
+          "loader": "UNETLoader",
+          "category": "diffusion_models",
+          "filename": "qwen_image_2.1_int8_convrot.safetensors",
+          "revision": null,
+          "sha256": null
+        },
+        {
+          "node": "5",
+          "input": "clip_name",
+          "loader": "CLIPLoader",
+          "category": "text_encoders",
+          "filename": "qwen3vl_8b_int8_convrot.safetensors",
+          "revision": null,
+          "sha256": null
+        },
+        {
+          "node": "6",
+          "input": "vae_name",
+          "loader": "VAELoader",
+          "category": "vae",
+          "filename": "qwen_image_2.1_vae_bf16.safetensors",
+          "revision": null,
+          "sha256": null
+        },
+        {
+          "node": "13",
+          "input": "lora_name",
+          "loader": "LoraLoaderModelOnly",
+          "category": "loras",
+          "filename": "qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors",
+          "revision": null,
+          "sha256": null
+        }
+      ],
+      "source": "Adapted from Comfy-Org/workflow_templates @ d0e41fe5423f93db5b5872cf273d7b1af8aa68bc, image_qwen_image_2_1_turbo_image_edit.json; Turbo LoRA path is recommended by Comfy-Org/Qwen-Image-2.1 model card. See docs/QWEN_EXPERIMENT.md.",
+      "bindings": {
+        "image": {
+          "node": "1",
+          "input": "image"
+        },
+        "prompt": {
+          "node": "7",
+          "input": "prompt"
+        },
+        "seed": {
+          "node": "14",
+          "input": "noise_seed"
+        },
+        "outputPrefix": {
+          "node": "12",
+          "input": "filename_prefix"
+        }
+      },
+      "enabled": true
     }
   ]
 }

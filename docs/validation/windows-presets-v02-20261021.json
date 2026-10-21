@@ -1,0 +1,748 @@
+{
+  "date": "2026-10-21",
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 5080",
+    "deviceTotalMiB": 16303,
+    "hostRamBytes": 50971602944
+  },
+  "comfyCommit": "37ff76b4d3d47405ba46ac1e14698e280b70b33f",
+  "unitTests": {
+    "passed": 190,
+    "subtestsPassed": 176,
+    "skipped": 0
+  },
+  "qualityAdmission": "pending_human_review",
+  "matrix": {
+    "scenarios": 4,
+    "subjectsPerScenario": 3,
+    "seeds": [
+      20261021,
+      424242
+    ],
+    "inputSizes": [
+      768,
+      1024
+    ],
+    "casesPerPreset": 48,
+    "runOrder": [
+      "qwen21-turbo-edit-v1",
+      "qwen21-edit-v1",
+      "paint-edit-v1"
+    ]
+  },
+  "comparison": {
+    "formatVersion": 1,
+    "generatedAt": "2026-10-21T03:41:26.578592+00:00",
+    "synthetic": true,
+    "qualityAdmission": "pending_human_review",
+    "models": [
+      {
+        "presetId": "paint-edit-v1",
+        "counts": {
+          "succeeded": 48,
+          "failed": 0,
+          "poll_timeout": 0,
+          "pending": 0,
+          "invalid_result": 0
+        },
+        "freshTimingSamples": 48,
+        "recoveryResults": 0,
+        "freshEndToEndSeconds": {
+          "min": 4.203,
+          "p50": 5.219,
+          "max": 10.266
+        },
+        "maxSampledDeviceUsedMiB": 15629.0,
+        "maxSampledProcessRssMiB": 3659.92578125,
+        "executionProvenance": [
+          {
+            "graphHash": "da5ad7e451953f11a5eedd4f64b793c78c9f08c07dd30f5bd1eb9c2d1c583ec9",
+            "dependencyFingerprint": "8c0b900b7235ee6880cf543850b7686a4d684942579d5e52b406b492faeaf5c2",
+            "presetVersion": "1.0.0"
+          }
+        ],
+        "weightHashEvidence": "Matching individual weight hashes are included in frozenDependencies in this document.",
+        "byInputSize": [
+          {
+            "inputSize": 768,
+            "completed": 24,
+            "freshTimingSamples": 24,
+            "recoveryResults": 0,
+            "freshEndToEndSeconds": {
+              "min": 4.203,
+              "p50": 5.218,
+              "max": 10.266
+            },
+            "maxSampledDeviceUsedMiB": 15609.0,
+            "maxSampledProcessRssMiB": 3659.92578125
+          },
+          {
+            "inputSize": 1024,
+            "completed": 24,
+            "freshTimingSamples": 24,
+            "recoveryResults": 0,
+            "freshEndToEndSeconds": {
+              "min": 4.203,
+              "p50": 5.2265,
+              "max": 5.547
+            },
+            "maxSampledDeviceUsedMiB": 15629.0,
+            "maxSampledProcessRssMiB": 3286.19921875
+          }
+        ]
+      },
+      {
+        "presetId": "qwen21-edit-v1",
+        "counts": {
+          "succeeded": 48,
+          "failed": 0,
+          "poll_timeout": 0,
+          "pending": 0,
+          "invalid_result": 0
+        },
+        "freshTimingSamples": 48,
+        "recoveryResults": 0,
+        "freshEndToEndSeconds": {
+          "min": 8.219,
+          "p50": 14.2735,
+          "max": 21.328
+        },
+        "maxSampledDeviceUsedMiB": 15742.0,
+        "maxSampledProcessRssMiB": 3755.484375,
+        "executionProvenance": [
+          {
+            "graphHash": "5fb3e36df5aef119811b55a6f51c54330525a76b9f339013bd00e9f3d8f6aa2e",
+            "dependencyFingerprint": "5bfbf8bcc92f869d1005e0a0a3a2666b3ad4895b87243e9d9a865b142ea61459",
+            "presetVersion": "1.0.0"
+          }
+        ],
+        "weightHashEvidence": "Matching individual weight hashes are included in frozenDependencies in this document.",
+        "byInputSize": [
+          {
+            "inputSize": 768,
+            "completed": 24,
+            "freshTimingSamples": 24,
+            "recoveryResults": 0,
+            "freshEndToEndSeconds": {
+              "min": 8.219,
+              "p50": 10.234,
+              "max": 17.282
+            },
+            "maxSampledDeviceUsedMiB": 15742.0,
+            "maxSampledProcessRssMiB": 3755.484375
+          },
+          {
+            "inputSize": 1024,
+            "completed": 24,
+            "freshTimingSamples": 24,
+            "recoveryResults": 0,
+            "freshEndToEndSeconds": {
+              "min": 14.266,
+              "p50": 15.2735,
+              "max": 21.328
+            },
+            "maxSampledDeviceUsedMiB": 15631.0,
+            "maxSampledProcessRssMiB": 3659.92578125
+          }
+        ]
+      },
+      {
+        "presetId": "qwen21-turbo-edit-v1",
+        "counts": {
+          "succeeded": 48,
+          "failed": 0,
+          "poll_timeout": 0,
+          "pending": 0,
+          "invalid_result": 0
+        },
+        "freshTimingSamples": 48,
+        "recoveryResults": 0,
+        "freshEndToEndSeconds": {
+          "min": 5.219,
+          "p50": 8.235,
+          "max": 17.297
+        },
+        "maxSampledDeviceUsedMiB": 15783.0,
+        "maxSampledProcessRssMiB": 3611.18359375,
+        "executionProvenance": [
+          {
+            "graphHash": "d045d4490a90d305a1688cdb96db0ba72fb7d0ddccae730eb70b86f24d3ef7cd",
+            "dependencyFingerprint": "44981b69be67e567d9320d5f2f06fda6d3452b27fc00fe2812470c54fccdf9e2",
+            "presetVersion": "1.0.0"
+          }
+        ],
+        "weightHashEvidence": "Matching individual weight hashes are included in frozenDependencies in this document.",
+        "byInputSize": [
+          {
+            "inputSize": 768,
+            "completed": 24,
+            "freshTimingSamples": 24,
+            "recoveryResults": 0,
+            "freshEndToEndSeconds": {
+              "min": 5.219,
+              "p50": 7.2265,
+              "max": 11.234
+            },
+            "maxSampledDeviceUsedMiB": 15783.0,
+            "maxSampledProcessRssMiB": 3611.18359375
+          },
+          {
+            "inputSize": 1024,
+            "completed": 24,
+            "freshTimingSamples": 24,
+            "recoveryResults": 0,
+            "freshEndToEndSeconds": {
+              "min": 8.219,
+              "p50": 8.25,
+              "max": 17.297
+            },
+            "maxSampledDeviceUsedMiB": 15734.0,
+            "maxSampledProcessRssMiB": 3518.46875
+          }
+        ]
+      }
+    ],
+    "measurementNotes": "Fresh submission times include upload, queueing, dependency verification and download. Recovery times are excluded. Sampled device memory includes other apps and may miss short peaks. These are not per-job allocation peaks."
+  },
+  "frozenDependencies": [
+    {
+      "presetId": "paint-edit-v1",
+      "presetVersion": "1.0.0",
+      "graphHash": "da5ad7e451953f11a5eedd4f64b793c78c9f08c07dd30f5bd1eb9c2d1c583ec9",
+      "dependencyFingerprint": "8c0b900b7235ee6880cf543850b7686a4d684942579d5e52b406b492faeaf5c2",
+      "runtime": {
+        "sourceFileCount": 558,
+        "sourceSha256": "5530284463a6ad4ad4f31afa0a6c7ceba9e44d7aa5c1cce312b763322424b61c",
+        "versions": {
+          "comfyui_version": "0.42.0",
+          "packages": [
+            {
+              "installed": "0.5.6",
+              "name": "comfy-aimdo",
+              "required": "0.5.6"
+            },
+            {
+              "installed": "0.2.39",
+              "name": "comfy-kitchen",
+              "required": "0.2.39"
+            },
+            {
+              "installed": "0.5.14",
+              "name": "comfyui-embedded-docs",
+              "required": "0.5.14"
+            },
+            {
+              "installed": "1.57.1",
+              "name": "comfyui-frontend-package",
+              "required": "1.57.1"
+            },
+            {
+              "installed": "0.11.93",
+              "name": "comfyui-workflow-templates",
+              "required": "0.11.93"
+            }
+          ],
+          "python_version": "3.13.12 (main, Feb 12 2026, 00:38:53) [MSC v.1944 64 bit (AMD64)]",
+          "pytorch_version": "2.12.1+cu130"
+        },
+        "weights": [
+          {
+            "bytes": 4070624520,
+            "category": "diffusion_models",
+            "filename": "flux-2-klein-4b-fp8.safetensors",
+            "sha256": "97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6"
+          },
+          {
+            "bytes": 8044982048,
+            "category": "text_encoders",
+            "filename": "qwen_3_4b.safetensors",
+            "sha256": "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a"
+          },
+          {
+            "bytes": 336213556,
+            "category": "vae",
+            "filename": "flux2-vae.safetensors",
+            "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5"
+          }
+        ]
+      }
+    },
+    {
+      "presetId": "qwen21-edit-v1",
+      "presetVersion": "1.0.0",
+      "graphHash": "5fb3e36df5aef119811b55a6f51c54330525a76b9f339013bd00e9f3d8f6aa2e",
+      "dependencyFingerprint": "5bfbf8bcc92f869d1005e0a0a3a2666b3ad4895b87243e9d9a865b142ea61459",
+      "runtime": {
+        "sourceFileCount": 558,
+        "sourceSha256": "5530284463a6ad4ad4f31afa0a6c7ceba9e44d7aa5c1cce312b763322424b61c",
+        "versions": {
+          "comfyui_version": "0.42.0",
+          "packages": [
+            {
+              "installed": "0.5.6",
+              "name": "comfy-aimdo",
+              "required": "0.5.6"
+            },
+            {
+              "installed": "0.2.39",
+              "name": "comfy-kitchen",
+              "required": "0.2.39"
+            },
+            {
+              "installed": "0.5.14",
+              "name": "comfyui-embedded-docs",
+              "required": "0.5.14"
+            },
+            {
+              "installed": "1.57.1",
+              "name": "comfyui-frontend-package",
+              "required": "1.57.1"
+            },
+            {
+              "installed": "0.11.93",
+              "name": "comfyui-workflow-templates",
+              "required": "0.11.93"
+            }
+          ],
+          "python_version": "3.13.12 (main, Feb 12 2026, 00:38:53) [MSC v.1944 64 bit (AMD64)]",
+          "pytorch_version": "2.12.1+cu130"
+        },
+        "weights": [
+          {
+            "bytes": 7256783064,
+            "category": "diffusion_models",
+            "filename": "qwen_image_2.1_int8_convrot.safetensors",
+            "sha256": "cb74113cb03faecd79611b01fd7fd642f0aa60d6f0b95086abee214d75eaa57d"
+          },
+          {
+            "bytes": 9350798360,
+            "category": "text_encoders",
+            "filename": "qwen3vl_8b_int8_convrot.safetensors",
+            "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+          },
+          {
+            "bytes": 675509688,
+            "category": "vae",
+            "filename": "qwen_image_2.1_vae_bf16.safetensors",
+            "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+          }
+        ]
+      }
+    },
+    {
+      "presetId": "qwen21-turbo-edit-v1",
+      "presetVersion": "1.0.0",
+      "graphHash": "d045d4490a90d305a1688cdb96db0ba72fb7d0ddccae730eb70b86f24d3ef7cd",
+      "dependencyFingerprint": "44981b69be67e567d9320d5f2f06fda6d3452b27fc00fe2812470c54fccdf9e2",
+      "runtime": {
+        "sourceFileCount": 558,
+        "sourceSha256": "5530284463a6ad4ad4f31afa0a6c7ceba9e44d7aa5c1cce312b763322424b61c",
+        "versions": {
+          "comfyui_version": "0.42.0",
+          "packages": [
+            {
+              "installed": "0.5.6",
+              "name": "comfy-aimdo",
+              "required": "0.5.6"
+            },
+            {
+              "installed": "0.2.39",
+              "name": "comfy-kitchen",
+              "required": "0.2.39"
+            },
+            {
+              "installed": "0.5.14",
+              "name": "comfyui-embedded-docs",
+              "required": "0.5.14"
+            },
+            {
+              "installed": "1.57.1",
+              "name": "comfyui-frontend-package",
+              "required": "1.57.1"
+            },
+            {
+              "installed": "0.11.93",
+              "name": "comfyui-workflow-templates",
+              "required": "0.11.93"
+            }
+          ],
+          "python_version": "3.13.12 (main, Feb 12 2026, 00:38:53) [MSC v.1944 64 bit (AMD64)]",
+          "pytorch_version": "2.12.1+cu130"
+        },
+        "weights": [
+          {
+            "bytes": 7256783064,
+            "category": "diffusion_models",
+            "filename": "qwen_image_2.1_int8_convrot.safetensors",
+            "sha256": "cb74113cb03faecd79611b01fd7fd642f0aa60d6f0b95086abee214d75eaa57d"
+          },
+          {
+            "bytes": 9350798360,
+            "category": "text_encoders",
+            "filename": "qwen3vl_8b_int8_convrot.safetensors",
+            "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+          },
+          {
+            "bytes": 675509688,
+            "category": "vae",
+            "filename": "qwen_image_2.1_vae_bf16.safetensors",
+            "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+          },
+          {
+            "bytes": 913314512,
+            "category": "loras",
+            "filename": "qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors",
+            "sha256": "208dd43250e1e01467ba190572ae2e7107a7870ec1ff026bc65f791fa1e80e95"
+          }
+        ]
+      }
+    }
+  ],
+  "limitations": [
+    "Synthetic inputs only; human review of representative artwork is still required.",
+    "Times include upload, queueing, dependency verification and download; this is not an SLA or a controlled cold-start benchmark.",
+    "Periodic GPU memory samples include other apps and may miss short peaks.",
+    "The matrix ran before final admission guard and reporting-only refinements; final-build GPU checks are recorded separately.",
+    "Original iPad-facing bridge remains on the prior deployment; these are isolated test services.",
+    "Process restart is not an operating-system cold disk-cache test. Only Klein has a separate process-cold final smoke; Qwen final checks measure switching.",
+    "No real OOM was forced. OOM classification, timeout and recovery races were tested with deterministic fixtures.",
+    "iPad PR7 real-device integration and representative-artwork quality admission are not established by these Windows tests."
+  ],
+  "launcherCompatibilityTests": {
+    "passed": 33,
+    "subtestsPassed": 38,
+    "launcherCommit": "59f4e65"
+  },
+  "finalBuildSmoke": [
+    {
+      "phase": "first_request_after_ComfyUI_process_restart",
+      "inputSize": 768,
+      "scenario": "lineart_colorization",
+      "subject": "still_life",
+      "startedAt": "2026-10-21T03:43:41.515754Z",
+      "presetId": "paint-edit-v1",
+      "seed": 13579,
+      "state": "succeeded",
+      "elapsedSeconds": 10.437,
+      "execution": {
+        "presetVersion": "1.0.0",
+        "graphHash": "da5ad7e451953f11a5eedd4f64b793c78c9f08c07dd30f5bd1eb9c2d1c583ec9",
+        "dependencyFingerprint": "0fa8e40dcbcfb59d035233550eab25b41ab6819eee0c7f7d42edcc65165c5dbe"
+      },
+      "resourceMeasurement": {
+        "status": "sampled",
+        "intervalSeconds": 0.5,
+        "sampleCount": 20,
+        "attemptCount": 20,
+        "gpuSampleCount": 20,
+        "gpuStatus": "sampled",
+        "sampledPeakDeviceUsedMiB": 14029.0,
+        "sampledPeakSystemUsedMiB": 20999.890625,
+        "deviceAggregation": "sum_of_visible_gpus",
+        "limitations": "Periodic samples may miss short peaks. GPU values include all apps on all visible devices, not a CUDA allocation peak. Process RSS covers only the explicitly supplied PID, without children; system memory includes other apps. Measurements are not per-job allocations.",
+        "sampledPeakProcessRssMiB": 2619.59765625
+      },
+      "verification": {
+        "sha256": "30c693b0b4e9ff16e32167a0d10128170be70a52e7fa3cfe2f4e91277eb294d7",
+        "width": 768,
+        "height": 768,
+        "sourceAndCropMatch": true,
+        "maskZeroAlphaZero": true,
+        "alphaWithinMask": true,
+        "compositeOutsideMaskUnchanged": true,
+        "blackMaskPixels": 0,
+        "grayMaskPixels": 0,
+        "maskApplied": true,
+        "alphaMode": "straight"
+      },
+      "frozenRuntime": {
+        "executionOptions": [
+          "--disable-auto-launch",
+          "--disable-all-custom-nodes",
+          "--disable-api-nodes"
+        ],
+        "sourceFileCount": 558,
+        "sourceSha256": "5530284463a6ad4ad4f31afa0a6c7ceba9e44d7aa5c1cce312b763322424b61c",
+        "versions": {
+          "comfyui_version": "0.42.0",
+          "packages": [
+            {
+              "installed": "0.5.6",
+              "name": "comfy-aimdo",
+              "required": "0.5.6"
+            },
+            {
+              "installed": "0.2.39",
+              "name": "comfy-kitchen",
+              "required": "0.2.39"
+            },
+            {
+              "installed": "0.5.14",
+              "name": "comfyui-embedded-docs",
+              "required": "0.5.14"
+            },
+            {
+              "installed": "1.57.1",
+              "name": "comfyui-frontend-package",
+              "required": "1.57.1"
+            },
+            {
+              "installed": "0.11.93",
+              "name": "comfyui-workflow-templates",
+              "required": "0.11.93"
+            }
+          ],
+          "python_version": "3.13.12 (main, Feb 12 2026, 00:38:53) [MSC v.1944 64 bit (AMD64)]",
+          "pytorch_version": "2.12.1+cu130"
+        },
+        "weights": [
+          {
+            "bytes": 4070624520,
+            "category": "diffusion_models",
+            "filename": "flux-2-klein-4b-fp8.safetensors",
+            "sha256": "97ed34fe0567e436200f2faee3939b88f2b5d99f8af2a4dc16532c4245c0ccb6"
+          },
+          {
+            "bytes": 8044982048,
+            "category": "text_encoders",
+            "filename": "qwen_3_4b.safetensors",
+            "sha256": "6c671498573ac2f7a5501502ccce8d2b08ea6ca2f661c458e708f36b36edfc5a"
+          },
+          {
+            "bytes": 336213556,
+            "category": "vae",
+            "filename": "flux2-vae.safetensors",
+            "sha256": "d64f3a68e1cc4f9f4e29b6e0da38a0204fe9a49f2d4053f0ec1fa1ca02f9c4b5"
+          }
+        ]
+      }
+    },
+    {
+      "phase": "switch_from_Klein",
+      "inputSize": 768,
+      "scenario": "lineart_colorization",
+      "subject": "still_life",
+      "startedAt": "2026-10-21T03:43:54.476009Z",
+      "presetId": "qwen21-edit-v1",
+      "seed": 13579,
+      "state": "succeeded",
+      "elapsedSeconds": 16.5,
+      "execution": {
+        "presetVersion": "1.0.0",
+        "graphHash": "5fb3e36df5aef119811b55a6f51c54330525a76b9f339013bd00e9f3d8f6aa2e",
+        "dependencyFingerprint": "0eb5744742ca611a63cc7ac65cbe8204806aa9b8626dc6f0837e2f58ec883e48"
+      },
+      "resourceMeasurement": {
+        "status": "sampled",
+        "intervalSeconds": 0.5,
+        "sampleCount": 31,
+        "attemptCount": 31,
+        "gpuSampleCount": 31,
+        "gpuStatus": "sampled",
+        "sampledPeakDeviceUsedMiB": 15407.0,
+        "sampledPeakSystemUsedMiB": 22883.49609375,
+        "deviceAggregation": "sum_of_visible_gpus",
+        "limitations": "Periodic samples may miss short peaks. GPU values include all apps on all visible devices, not a CUDA allocation peak. Process RSS covers only the explicitly supplied PID, without children; system memory includes other apps. Measurements are not per-job allocations.",
+        "sampledPeakProcessRssMiB": 2962.92578125
+      },
+      "verification": {
+        "sha256": "a1d92ee358f41e5e7450543ce1829797da590afdcf9ce48e0618929dbfb865be",
+        "width": 768,
+        "height": 768,
+        "sourceAndCropMatch": true,
+        "maskZeroAlphaZero": true,
+        "alphaWithinMask": true,
+        "compositeOutsideMaskUnchanged": true,
+        "blackMaskPixels": 0,
+        "grayMaskPixels": 0,
+        "maskApplied": true,
+        "alphaMode": "straight"
+      },
+      "frozenRuntime": {
+        "executionOptions": [
+          "--disable-auto-launch",
+          "--disable-all-custom-nodes",
+          "--disable-api-nodes"
+        ],
+        "sourceFileCount": 558,
+        "sourceSha256": "5530284463a6ad4ad4f31afa0a6c7ceba9e44d7aa5c1cce312b763322424b61c",
+        "versions": {
+          "comfyui_version": "0.42.0",
+          "packages": [
+            {
+              "installed": "0.5.6",
+              "name": "comfy-aimdo",
+              "required": "0.5.6"
+            },
+            {
+              "installed": "0.2.39",
+              "name": "comfy-kitchen",
+              "required": "0.2.39"
+            },
+            {
+              "installed": "0.5.14",
+              "name": "comfyui-embedded-docs",
+              "required": "0.5.14"
+            },
+            {
+              "installed": "1.57.1",
+              "name": "comfyui-frontend-package",
+              "required": "1.57.1"
+            },
+            {
+              "installed": "0.11.93",
+              "name": "comfyui-workflow-templates",
+              "required": "0.11.93"
+            }
+          ],
+          "python_version": "3.13.12 (main, Feb 12 2026, 00:38:53) [MSC v.1944 64 bit (AMD64)]",
+          "pytorch_version": "2.12.1+cu130"
+        },
+        "weights": [
+          {
+            "bytes": 7256783064,
+            "category": "diffusion_models",
+            "filename": "qwen_image_2.1_int8_convrot.safetensors",
+            "sha256": "cb74113cb03faecd79611b01fd7fd642f0aa60d6f0b95086abee214d75eaa57d"
+          },
+          {
+            "bytes": 9350798360,
+            "category": "text_encoders",
+            "filename": "qwen3vl_8b_int8_convrot.safetensors",
+            "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+          },
+          {
+            "bytes": 675509688,
+            "category": "vae",
+            "filename": "qwen_image_2.1_vae_bf16.safetensors",
+            "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+          }
+        ]
+      }
+    },
+    {
+      "phase": "switch_from_Qwen_base_to_Turbo_LoRA",
+      "inputSize": 768,
+      "scenario": "lineart_colorization",
+      "subject": "still_life",
+      "startedAt": "2026-10-21T03:44:05.635161Z",
+      "presetId": "qwen21-turbo-edit-v1",
+      "seed": 13579,
+      "state": "succeeded",
+      "elapsedSeconds": 7.656,
+      "execution": {
+        "presetVersion": "1.0.0",
+        "graphHash": "d045d4490a90d305a1688cdb96db0ba72fb7d0ddccae730eb70b86f24d3ef7cd",
+        "dependencyFingerprint": "40c0f7a6b63f327c11994d986ca05b46f1aa8aa85cb057898d528afbc62f0674"
+      },
+      "resourceMeasurement": {
+        "status": "sampled",
+        "intervalSeconds": 0.5,
+        "sampleCount": 14,
+        "attemptCount": 14,
+        "gpuSampleCount": 14,
+        "gpuStatus": "sampled",
+        "sampledPeakDeviceUsedMiB": 15439.0,
+        "sampledPeakSystemUsedMiB": 22889.2421875,
+        "deviceAggregation": "sum_of_visible_gpus",
+        "limitations": "Periodic samples may miss short peaks. GPU values include all apps on all visible devices, not a CUDA allocation peak. Process RSS covers only the explicitly supplied PID, without children; system memory includes other apps. Measurements are not per-job allocations.",
+        "sampledPeakProcessRssMiB": 2934.125
+      },
+      "verification": {
+        "sha256": "f68c967c2400e9d0844342059eaae087bd49ec1b3a9e221f1a08d30d28c22cff",
+        "width": 768,
+        "height": 768,
+        "sourceAndCropMatch": true,
+        "maskZeroAlphaZero": true,
+        "alphaWithinMask": true,
+        "compositeOutsideMaskUnchanged": true,
+        "blackMaskPixels": 0,
+        "grayMaskPixels": 0,
+        "maskApplied": true,
+        "alphaMode": "straight"
+      },
+      "frozenRuntime": {
+        "executionOptions": [
+          "--disable-auto-launch",
+          "--disable-all-custom-nodes",
+          "--disable-api-nodes"
+        ],
+        "sourceFileCount": 558,
+        "sourceSha256": "5530284463a6ad4ad4f31afa0a6c7ceba9e44d7aa5c1cce312b763322424b61c",
+        "versions": {
+          "comfyui_version": "0.42.0",
+          "packages": [
+            {
+              "installed": "0.5.6",
+              "name": "comfy-aimdo",
+              "required": "0.5.6"
+            },
+            {
+              "installed": "0.2.39",
+              "name": "comfy-kitchen",
+              "required": "0.2.39"
+            },
+            {
+              "installed": "0.5.14",
+              "name": "comfyui-embedded-docs",
+              "required": "0.5.14"
+            },
+            {
+              "installed": "1.57.1",
+              "name": "comfyui-frontend-package",
+              "required": "1.57.1"
+            },
+            {
+              "installed": "0.11.93",
+              "name": "comfyui-workflow-templates",
+              "required": "0.11.93"
+            }
+          ],
+          "python_version": "3.13.12 (main, Feb 12 2026, 00:38:53) [MSC v.1944 64 bit (AMD64)]",
+          "pytorch_version": "2.12.1+cu130"
+        },
+        "weights": [
+          {
+            "bytes": 7256783064,
+            "category": "diffusion_models",
+            "filename": "qwen_image_2.1_int8_convrot.safetensors",
+            "sha256": "cb74113cb03faecd79611b01fd7fd642f0aa60d6f0b95086abee214d75eaa57d"
+          },
+          {
+            "bytes": 9350798360,
+            "category": "text_encoders",
+            "filename": "qwen3vl_8b_int8_convrot.safetensors",
+            "sha256": "8bfd0f6e12abf2d2d697ecc888e5e90b0d6741d6708f05799f53afa560452e8f"
+          },
+          {
+            "bytes": 675509688,
+            "category": "vae",
+            "filename": "qwen_image_2.1_vae_bf16.safetensors",
+            "sha256": "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"
+          },
+          {
+            "bytes": 913314512,
+            "category": "loras",
+            "filename": "qwen_image_2.1_turbo_lora_avg_rank_178_bf16.safetensors",
+            "sha256": "208dd43250e1e01467ba190572ae2e7107a7870ec1ff026bc65f791fa1e80e95"
+          }
+        ]
+      }
+    }
+  ],
+  "finalBuildBridgeSourceSha256": "88abb1a63293ae8ffebd7f75aa020f69fe020ece6a9d2c0a145156254473794f",
+  "finalBuildBridgeSourceFiles": {
+    "ipad_bridge/bridge/__init__.py": "f8e35c97bb5268c4de7bd29805c392cfaee0b6abd5f0ec80ac8db449dde73429",
+    "ipad_bridge/bridge/__main__.py": "f8e00a67020efe975c5533d229cf59dcebc18ccf32955e1f9b2b9e0a88ce9dc5",
+    "ipad_bridge/bridge/app.py": "fcfde272c771b020ee760fd435b80e9ac9b58b7e231c2f0aba7c260212853836",
+    "ipad_bridge/bridge/comfy.py": "13dc3ae8eb27ad631f335fc217759997ea4b035b0c68921241de4fbc676ab7fc",
+    "ipad_bridge/bridge/config.py": "36956bd253663557f658e19bb3adeb8276d25ac2247f5f0cb9b9f063601b8c08",
+    "ipad_bridge/bridge/identity.py": "a1c74f7cb4473662b8a6799effcbc09bcc3710e5c1ec65bc059a0af4b9bd8c64",
+    "ipad_bridge/bridge/images.py": "05ff7ce373a35d74f4b25a81bc15b5ccac06eaa7034a7b09d3f4c40fe5e76a84",
+    "ipad_bridge/bridge/local_runtime.py": "18442dbb530f50f2e4d6b5a4187ba3a05e4000036d88f68c7ca21505dece14a0",
+    "ipad_bridge/bridge/registry.py": "e3ff561b5a125e1553954af8b26fca1e34c651073196d6acba19aa2ae733ceb3",
+    "ipad_bridge/bridge/snapshots.py": "a19ee7e3e803f3e70b95b5d1e138f9009c0bd2b2d29c1795ff0f3efbe9ab2b9a",
+    "ipad_bridge/bridge/store.py": "f1d8b9e995e109b166b70355c77d8ac4eb6909e08796545f29afb01f74d635d7",
+    "ipad_bridge/bridge/worker.py": "305d9266b074be50c2a015ecd434fe76045824ca275197e5d9ea0d0f19039856"
+  }
+}

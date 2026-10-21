@@ -7,12 +7,18 @@ No HTTP operation here retries a submission or interrupts the shared GPU queue.
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import copy
 import json
 import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 import httpx
+
+from .registry import PresetRegistry, RegistryError
+from .identity import DependencyIdentity, IdentityError, digest_json
+from .local_runtime import attest_local_runtime, LocalRuntimeError
 
 
 class ComfyError(RuntimeError):
@@ -25,8 +31,12 @@ class ComfyError(RuntimeError):
 
 
 class ComfyBackend:
-    def __init__(self, base_url: str, preset_dir: Path, timeout: float = 60.0):
+    def __init__(self, base_url: str, preset_dir: Path, timeout: float = 60.0, *, registry=None, models_dir=None, install_dir=None):
         self.preset_dir = Path(preset_dir)
+        self.base_url = base_url
+        self.registry = registry or PresetRegistry(preset_dir)
+        self.identity = DependencyIdentity(models_dir, install_dir)
+        self._freeze_lock = asyncio.Lock()
         # Local GPU calls must not be redirected by a machine's HTTP proxy settings.
         self.client = httpx.AsyncClient(
             base_url=base_url.rstrip("/") + "/", timeout=timeout,
@@ -43,14 +53,10 @@ class ComfyBackend:
         await self.close()
 
     def _preset(self, preset_id: str) -> tuple[dict, dict]:
-        manifest = json.loads((self.preset_dir / "manifest.json").read_text("utf-8"))
-        entry = next((p for p in manifest["presets"] if p["id"] == preset_id), None)
-        if entry is None:
-            raise ComfyError("Unknown workflow preset.", "unknown_preset")
-        path = (self.preset_dir / entry["graph"]).resolve()
-        if not path.is_relative_to(self.preset_dir.resolve()):
-            raise ComfyError("Invalid server preset configuration.", "invalid_preset")
-        return entry, json.loads(path.read_text("utf-8"))
+        try:
+            return self.registry.load(preset_id)
+        except RegistryError as exc:
+            raise ComfyError(str(exc), exc.code) from None
 
     async def _json(self, method: str, route: str, *, submitting: bool = False, **kwargs: Any) -> dict:
         try:
@@ -83,9 +89,74 @@ class ComfyBackend:
             raise ComfyError("Invalid bridge job ID.", "invalid_job")
         return job_id
 
-    async def preflight(self, preset_id: str) -> dict:
+    @staticmethod
+    def _expanded_inputs(schema: dict) -> tuple[dict, dict]:
+        """Expand bounded core autogrow templates exactly as ComfyUI's V3 schema.
+
+        A container such as ``images`` is not itself an API input. Only named
+        children advertised by the core schema are accepted; arbitrary dotted
+        fields are never treated as optional or ignored.
+        """
+        required = dict(schema.get("required", {}))
+        optional = dict(schema.get("optional", {}))
+        for group in (required, optional):
+            for key, spec in list(group.items()):
+                if not isinstance(spec, (list, tuple)) or not spec:
+                    raise ValueError("Invalid input schema")
+                if spec[0] != "COMFY_AUTOGROW_V3":
+                    continue
+                if len(spec) != 2 or not isinstance(spec[1], dict):
+                    raise ValueError("Invalid autogrow schema")
+                template = spec[1].get("template")
+                if not isinstance(template, dict):
+                    raise ValueError("Missing autogrow template")
+                minimum = template.get("min")
+                if type(minimum) is not int or minimum < 0:
+                    raise ValueError("Invalid autogrow minimum")
+                if "names" in template and "prefix" not in template:
+                    names = template["names"]
+                elif "prefix" in template and "names" not in template:
+                    maximum = template.get("max")
+                    prefix = template["prefix"]
+                    if type(maximum) is not int or not 1 <= maximum <= 100 or not isinstance(prefix, str):
+                        raise ValueError("Invalid autogrow prefix")
+                    names = [f"{prefix}{index}" for index in range(maximum)]
+                else:
+                    raise ValueError("Unknown autogrow template")
+                if (not isinstance(names, list) or not 1 <= len(names) <= 100 or minimum > len(names)
+                        or any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", name) for name in names)
+                        or len(set(names)) != len(names)):
+                    raise ValueError("Invalid autogrow names")
+                inputs = template.get("input")
+                if not isinstance(inputs, dict):
+                    raise ValueError("Invalid autogrow input")
+                candidates = [(section, child) for section, children in inputs.items()
+                              if section in {"required", "optional"} and isinstance(children, dict)
+                              for child in children.values()]
+                if len(candidates) != 1:
+                    raise ValueError("Unsupported autogrow input count")
+                child_section, child_spec = candidates[0]
+                if (not isinstance(child_spec, (list, tuple)) or not child_spec
+                        or child_spec[0] == "COMFY_AUTOGROW_V3"):
+                    raise ValueError("Invalid nested autogrow input")
+                del group[key]
+                for index, name in enumerate(names):
+                    child = f"{key}.{name}"
+                    if child in required or child in optional:
+                        raise ValueError("Conflicting autogrow child")
+                    target = required if child_section == "required" and index < minimum else optional
+                    target[child] = child_spec
+        return required, {**required, **optional}
+
+    async def preflight(self, preset_id: str, snapshot: dict | None = None) -> dict:
         """Compare the fixed API graph against live node and model dropdown schemas."""
-        entry, graph = self._preset(preset_id)
+        if snapshot:
+            entry, graph = snapshot, snapshot["graph"]
+        else:
+            try:
+                entry, graph = self.registry.load(preset_id, allow_disabled=True)
+            except RegistryError as exc:
+                raise ComfyError(str(exc), exc.code) from None
         info = await self._json("GET", "/object_info")
         missing_nodes: set[str] = set()
         missing_models: set[str] = set()
@@ -96,8 +167,11 @@ class ComfyBackend:
                 missing_nodes.add(kind)
                 continue
             schema = info[kind].get("input", {})
-            required = schema.get("required", {})
-            allowed = {**required, **schema.get("optional", {})}
+            try:
+                required, allowed = self._expanded_inputs(schema)
+            except (ValueError, TypeError):
+                invalid.append(f"{kind}: unsupported input schema")
+                continue
             values = node["inputs"]
             invalid.extend(f"{kind}.{key}: missing" for key in required if key not in values)
             for key, value in values.items():
@@ -113,22 +187,105 @@ class ComfyBackend:
                     continue  # This job's unique input file is uploaded after preflight.
                 options = spec[0] if isinstance(spec[0], list) else (spec[1].get("options") if len(spec) > 1 and isinstance(spec[1], dict) else None)
                 if options is not None and value not in options:
-                    if key in ("unet_name", "clip_name", "vae_name"):
+                    if key in ("unet_name", "clip_name", "vae_name", "lora_name", "ckpt_name"):
                         missing_models.add(str(value))
                     else:
                         invalid.append(f"{kind}.{key}: unsupported value")
         return {
             "ok": not (missing_nodes or missing_models or invalid),
-            "presetId": preset_id, "technique": entry["technique"],
+            "presetId": preset_id, "technique": entry.get("technique", "reference_edit_with_output_mask"),
+            "installed": not (missing_nodes or missing_models),
+            "structuralPreflight": not (missing_nodes or missing_models or invalid),
+            "gpuSmoke": "unverified", "qualityAdmission": "pending",
             "missingNodes": sorted(missing_nodes), "missingModels": sorted(missing_models),
             "invalidInputs": invalid,
         }
 
-    async def prepare(self, image_path: Path, mask_path: Path, metadata: dict, job_id: str) -> dict:
+    async def _runtime_identity(self, snapshot: dict) -> dict:
+        stats = await self._json("GET", "/system_stats")
+        system = stats.get("system", {})
+        self._verify_local_runtime(system)
+        try:
+            instance = await asyncio.to_thread(attest_local_runtime, self.base_url, system["argv"])
+            local = await asyncio.to_thread(self.identity.capture, snapshot["dependencies"], instance["startedAt"])
+            if await asyncio.to_thread(attest_local_runtime, self.base_url, system["argv"]) != instance:
+                raise LocalRuntimeError("ComfyUI restarted during dependency verification. Retry the same request.")
+        except (IdentityError, LocalRuntimeError) as exc:
+            raise ComfyError(str(exc), "dependency_identity_unavailable") from None
+        versions = {key: system.get(key) for key in ("comfyui_version", "pytorch_version", "python_version")}
+        if not all(isinstance(value, str) and value for value in versions.values()):
+            raise ComfyError("ComfyUI did not report its runtime versions.", "runtime_identity_unavailable")
+        packages = system.get("comfy_package_versions", [])
+        if (not isinstance(packages, list) or not packages
+                or any(not isinstance(item, dict) or any(not isinstance(item.get(key), str) or not item[key] for key in ("name", "installed"))
+                       or (item.get("required") is not None and not isinstance(item["required"], str)) for item in packages)
+                or len({item["name"] for item in packages}) != len(packages)):
+            raise ComfyError("ComfyUI did not report its package versions.", "runtime_identity_unavailable")
+        versions["packages"] = sorted([{key: item.get(key) for key in ("name", "installed", "required")} for item in packages], key=lambda item: item["name"])
+        operational = {"--listen", "--port", "--models-directory", "--input-directory", "--output-directory", "--temp-directory", "--user-directory", "--database-url"}
+        options = []
+        args = iter(system["argv"][1:])
+        for arg in args:
+            if arg in operational:
+                next(args, None)
+            else:
+                options.append(arg)
+        return {**local, "versions": versions, "executionOptions": options}
+
+    def _verify_local_runtime(self, system: dict) -> None:
+        """Bind local file hashes to the actual controlled server, not a same-version neighbour."""
+        argv = system.get("argv")
+        install, models = self.identity.install_dir, self.identity.models_dir
+        try:
+            if not install or not models or not isinstance(argv, list) or not all(isinstance(arg, str) for arg in argv):
+                raise ValueError()
+            if Path(argv[0]).resolve() != (install / "main.py").resolve():
+                raise ValueError()
+            if sum(arg.split("=", 1)[0] == "--models-directory" for arg in argv) != 1 or Path(argv[argv.index("--models-directory") + 1]).resolve() != models.resolve():
+                raise ValueError()
+            if not {"--disable-all-custom-nodes", "--disable-api-nodes"} <= set(argv):
+                raise ValueError()
+            forbidden = ("--extra-model-paths-config", "--base-directory", "--enable-custom-nodes", "--whitelist-custom-nodes")
+            if any(arg.split("=", 1)[0] in forbidden for arg in argv) or (install / "extra_model_paths.yaml").exists():
+                raise ValueError()
+            # Only canonical controlled-launch options are accepted. argparse accepts
+            # abbreviations and repeated flags that could otherwise override a root.
+            supported = {"--listen", "--port", "--models-directory", "--input-directory", "--output-directory",
+                         "--temp-directory", "--user-directory", "--database-url", "--disable-auto-launch",
+                         "--disable-all-custom-nodes", "--disable-api-nodes", "--lowvram", "--normalvram",
+                         "--disable-smart-memory", "--cache-none", "--reserve-vram", "--cuda-device",
+                         "--use-pytorch-cross-attention"}
+            if any(arg not in supported for arg in argv[1:] if arg.startswith("--")):
+                raise ValueError()
+        except (ValueError, IndexError, OSError):
+            raise ComfyError("The running ComfyUI must match the configured source and model roots with custom/API nodes disabled and no extra model paths.", "runtime_configuration_mismatch") from None
+
+    async def freeze(self, metadata: dict) -> dict:
+        """Capture accepted graph, fixed parameters, exact weights and runtime before enqueue."""
+        async with self._freeze_lock:
+            try:
+                snapshot = self.registry.freeze(metadata["workflowPreset"], metadata)
+            except RegistryError as exc:
+                raise ComfyError(str(exc), exc.code) from None
+            limits = snapshot["limits"]
+            width, height = metadata["inputSize"]["width"], metadata["inputSize"]["height"]
+            if (width * height > limits["maxInputPixels"] or min(width, height) < limits["minimumInputSide"]
+                    or max(width, height) > limits["maximumAspectRatio"] * min(width, height)):
+                raise ComfyError("The crop exceeds this preset's supported size or aspect ratio. Adjust the crop explicitly.", "invalid_crop")
+            status = await self.preflight(snapshot["presetId"], snapshot)
+            if not status["ok"]:
+                raise ComfyError("The selected preset is missing compatible nodes, models or inputs. Check its backend status.", "preset_unavailable")
+            snapshot["runtime"] = await self._runtime_identity(snapshot)
+            snapshot["executionContractVersion"] = 1
+            snapshot["comfyOrigin"] = self.base_url.rstrip("/")
+            snapshot["dependencyFingerprint"] = digest_json(snapshot["runtime"])
+            return snapshot
+
+    async def prepare(self, image_path: Path, mask_path: Path, metadata: dict, job_id: str, snapshot: dict | None = None) -> dict:
         """Upload a crop and return a fresh API graph; mask is enforced by the worker."""
         self._job_id(job_id)
         preset_id = metadata.get("workflowPreset", "paint-edit-v1")
-        entry, graph = self._preset(preset_id)
+        entry, graph = (snapshot, copy.deepcopy(snapshot["graph"])) if snapshot else self._preset(preset_id)
         prompt = metadata.get("prompt")
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000:
             raise ComfyError("The edit prompt must contain 1 to 4000 characters.", "invalid_prompt")
@@ -146,7 +303,13 @@ class ComfyBackend:
                 )
         if not Path(image_path).is_file() or not Path(mask_path).is_file():
             raise ComfyError("The saved image or mask is missing.", "missing_input")
-        status = await self.preflight(preset_id)
+        if snapshot:
+            if snapshot["presetId"] != preset_id or snapshot["parameters"] != {"prompt": prompt, "seed": seed} or digest_json(graph) != snapshot["graphHash"]:
+                raise ComfyError("The saved execution snapshot is inconsistent.", "invalid_execution_snapshot")
+            current = await self._runtime_identity(snapshot)
+            if digest_json(current) != snapshot.get("dependencyFingerprint"):
+                raise ComfyError("The queued task's model or runtime changed. Restore its pinned dependencies before creating new work.", "dependency_changed")
+        status = await self.preflight(preset_id, snapshot)
         if not status["ok"]:
             details = status["missingNodes"] + status["missingModels"] + status["invalidInputs"]
             raise ComfyError("ComfyUI preset requirements are missing: " + ", ".join(details), "preset_unavailable")
@@ -180,6 +343,13 @@ class ComfyBackend:
     @staticmethod
     def _queue_items(queue: dict) -> list:
         return queue.get("queue_running", []) + queue.get("queue_pending", [])
+
+    async def queue_idle(self) -> bool:
+        """Fail closed on partial/malformed queue replies; a timeout is never release evidence."""
+        queue = await self._json("GET", "/queue")
+        if not all(isinstance(queue.get(key), list) for key in ("queue_running", "queue_pending")):
+            raise ComfyError("ComfyUI returned an incomplete queue state.", "comfy_invalid_response", True)
+        return not self._queue_items(queue)
 
     @staticmethod
     def _matches(item: Any, job_id: str) -> str | None:
@@ -230,7 +400,9 @@ class ComfyBackend:
         errors = [m for m in messages if isinstance(m, (list, tuple)) and m and m[0] in ("execution_error", "execution_interrupted")]
         if status.get("status_str") == "error" or errors:
             reason = "ComfyUI generation was interrupted." if any(m[0] == "execution_interrupted" for m in errors) else "ComfyUI generation failed; inspect the Windows ComfyUI log."
-            return {"state": "failed", "outputs": [], "error": reason}
+            diagnostic = " ".join(str(m[1].get("exception_type", "")) + " " + str(m[1].get("exception_message", "")) for m in errors if len(m) > 1 and isinstance(m[1], dict)).lower()
+            code = "out_of_memory" if any(word in diagnostic for word in ("outofmemory", "out of memory", "cuda error: memory allocation")) else "generation_failed"
+            return {"state": "failed", "outputs": [], "error": "The GPU ran out of memory. No lower-quality fallback was used." if code == "out_of_memory" else reason, "code": code}
         if not status.get("completed"):
             return {"state": "failed", "outputs": [], "error": "ComfyUI recorded an incomplete execution."}
         outputs = []

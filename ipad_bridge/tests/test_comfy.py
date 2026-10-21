@@ -3,10 +3,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 
 from bridge.comfy import ComfyBackend, ComfyError
+from bridge.identity import digest_json
 
 
 PRESETS = Path(__file__).resolve().parents[1] / "bridge" / "presets"
@@ -87,6 +89,86 @@ class ComfyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["missingNodes"], ["ReferenceLatent"])
         self.assertEqual(status["missingModels"], ["flux-2-klein-4b-fp8.safetensors"])
         self.assertIn("CLIPLoader.type: unsupported value", status["invalidInputs"])
+
+    async def test_qwen_autogrow_accepts_only_core_advertised_image_slots(self):
+        graph = json.loads((PRESETS / "qwen21-edit-v1.json").read_text("utf-8"))
+        info = {node["class_type"]: {"input": {"required": {key: ["ANY"] for key in node["inputs"]}}}
+                for node in graph.values()}
+        fields = info["TextEncodeQwenImage21"]["input"]["required"]
+        del fields["images.image_1"]
+        fields["images"] = ["COMFY_AUTOGROW_V3", {"template": {
+            "input": {"required": {"image": ["IMAGE"]}},
+            "names": [f"image_{i}" for i in range(1, 17)], "min": 0,
+        }}]
+        await self.mock(lambda request: httpx.Response(200, json=info))
+        # The root container is absent; only the advertised child is an input.
+        status = await self.backend.preflight("qwen21-edit-v1")
+        self.assertTrue(status["ok"], status)
+        graph["7"]["inputs"]["images.image_99"] = ["1", 0]
+        status = await self.backend.preflight("qwen21-edit-v1", {"graph": graph})
+        self.assertFalse(status["ok"])
+        self.assertIn("TextEncodeQwenImage21.images.image_99: unsupported", status["invalidInputs"])
+
+    async def test_autogrow_required_children_and_prefix_bounds(self):
+        schema = {"required": {"images": ["COMFY_AUTOGROW_V3", {"template": {
+            "input": {"required": {"image": ["IMAGE"]}}, "prefix": "image_", "min": 1, "max": 2,
+        }}]}}
+        required, allowed = self.backend._expanded_inputs(schema)
+        self.assertEqual(set(required), {"images.image_0"})
+        self.assertEqual(set(allowed), {"images.image_0", "images.image_1"})
+        schema["required"]["images"][1]["template"]["max"] = 101
+        with self.assertRaises(ValueError):
+            self.backend._expanded_inputs(schema)
+
+    async def test_queue_release_requires_complete_empty_reply(self):
+        for queue, expected in (({"queue_running": [], "queue_pending": []}, True),
+                                ({"queue_running": [queue_item()], "queue_pending": []}, False),
+                                ({"queue_running": [], "queue_pending": [queue_item()]}, False)):
+            await self.mock(lambda request: httpx.Response(200, json=queue))
+            self.assertEqual(await self.backend.queue_idle(), expected)
+        for queue in ({}, {"queue_running": []}, {"queue_running": [], "queue_pending": None}):
+            await self.mock(lambda request: httpx.Response(200, json=queue))
+            with self.assertRaises(ComfyError) as caught:
+                await self.backend.queue_idle()
+            self.assertEqual(caught.exception.code, "comfy_invalid_response")
+            self.assertTrue(caught.exception.retryable)
+
+    async def test_execution_out_of_memory_is_classified_without_private_detail(self):
+        for exception_type in ("torch.OutOfMemoryError", "RuntimeError"):
+            detail = {"exception_type": exception_type, "exception_message": "CUDA out of memory at private-model-path", "traceback": "private-trace"}
+            status = self.backend._history_state(finished(status={"completed": False, "status_str": "error", "messages": [["execution_error", detail]]}))
+            self.assertEqual(status["code"], "out_of_memory")
+            self.assertEqual(status["outputs"], [])
+            self.assertNotIn("private", json.dumps(status))
+
+    async def test_runtime_identity_must_match_actual_source_and_model_root(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.backend.identity.install_dir = root / "source"
+            self.backend.identity.models_dir = root / "models"
+            argv = [str(root / "source" / "main.py"), "--models-directory", str(root / "models"),
+                    "--disable-all-custom-nodes", "--disable-api-nodes"]
+            self.backend._verify_local_runtime({"argv": argv})
+            for bad in ([str(root / "other-source" / "main.py"), *argv[1:]],
+                        [argv[0], argv[1], str(root / "other-models"), *argv[3:]],
+                        argv + ["--extra-model-paths-config", "extra.yaml"]):
+                with self.assertRaises(ComfyError) as caught:
+                    self.backend._verify_local_runtime({"argv": bad})
+                self.assertEqual(caught.exception.code, "runtime_configuration_mismatch")
+
+    async def test_changed_dependencies_reject_frozen_task_before_upload(self):
+        metadata = {"workflowPreset": "paint-edit-v1", "prompt": "edit", "seed": 42}
+        snapshot = self.backend.registry.freeze("paint-edit-v1", metadata)
+        snapshot["dependencyFingerprint"] = digest_json({"weights": "original"})
+        self.backend._runtime_identity = AsyncMock(return_value={"weights": "changed"})
+        await self.mock(lambda request: self.fail("No upload or submit after dependency mismatch"))
+        with tempfile.TemporaryDirectory() as folder:
+            source, mask = Path(folder) / "input.png", Path(folder) / "mask.png"
+            source.write_bytes(b"source")
+            mask.write_bytes(b"mask")
+            with self.assertRaises(ComfyError) as caught:
+                await self.backend.prepare(source, mask, metadata, "job-a", snapshot)
+        self.assertEqual(caught.exception.code, "dependency_changed")
 
     async def test_thin_crop_is_rejected_before_upload_or_gpu_submission(self):
         def handler(request):

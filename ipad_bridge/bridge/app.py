@@ -14,7 +14,8 @@ from fastapi.exceptions import RequestValidationError
 
 from . import __version__
 from .config import Settings
-from .store import JobDeleted, JobNotFinished, RequestConflict, Store, public_job
+from .store import JobDeleted, JobNotFinished, RequestConflict, QueueFull, Store, public_job
+from .registry import PresetRegistry
 from .worker import Worker
 
 MAX_REQUEST_BYTES = 66 * 1024 * 1024
@@ -91,6 +92,7 @@ def create_app(settings: Settings) -> FastAPI:
     from .snapshots import ConflictError, SnapshotStore
 
     store = Store(settings.data_dir)
+    registry = PresetRegistry(settings.preset_dir, enabled_experimental=settings.enable_experimental)
     snapshots = SnapshotStore(settings.data_dir / "snapshots")
     access_token = settings.token()
 
@@ -104,7 +106,8 @@ def create_app(settings: Settings) -> FastAPI:
             await asyncio.to_thread(store.cleanup_deleted)
             if settings.backend == "comfyui":
                 from .comfy import ComfyBackend
-                backend = ComfyBackend(settings.comfy_url, Path(__file__).parent / "presets")
+                backend = ComfyBackend(settings.comfy_url, settings.preset_dir, registry=registry,
+                                       models_dir=settings.comfy_models_dir, install_dir=settings.comfy_install_dir)
             app.state.backend = backend
             if settings.start_worker:
                 task = asyncio.create_task(Worker(settings, store, backend).run())
@@ -124,6 +127,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.add_middleware(RequestLimits, access_token=access_token)
     app.state.store = store
     app.state.settings = settings
+    app.state.registry = registry
 
     async def authenticated(authorization: str | None = Header(default=None)):
         if not authorization or not secrets.compare_digest(authorization.encode("utf-8"), b"Bearer " + access_token.encode("ascii")):
@@ -173,8 +177,10 @@ def create_app(settings: Settings) -> FastAPI:
     async def capabilities():
         return {
             "protocolVersion": 1, "backend": settings.backend, "isSimulation": settings.backend == "mock",
-            "presets": [{"id": settings.preset_id, "technique": "simulation" if settings.backend == "mock" else "reference_edit_with_output_mask",
-                         "nativeInpainting": False, "maskAppliedToOutput": True}],
+            "presets": [{"id": "mock-paint-v1", "technique": "simulation", "nativeInpainting": False,
+                         "maskAppliedToOutput": True}] if settings.backend == "mock" else registry.descriptors(),
+            "defaultPreset": settings.preset_id,
+            "maxPendingJobs": settings.max_pending_jobs, "maxPendingBytes": settings.max_pending_bytes,
             "maxInputPixels": 4194304, "maxImageBytes": MAX_IMAGE_BYTES,
             "minInputSide": 1 if settings.backend == "mock" else 16,
             "maxInputAspectRatio": None if settings.backend == "mock" else 16,
@@ -185,13 +191,26 @@ def create_app(settings: Settings) -> FastAPI:
         }
 
     @app.get("/v1/backend/status", dependencies=[Depends(authenticated)])
-    async def backend_status():
+    async def backend_status(presetId: str | None = None):
         if settings.backend == "mock":
             return {"ok": True, "backend": "mock", "isSimulation": True}
         from .comfy import ComfyError
+        hold = store.get_hold()
+        configured = settings.comfy_models_dir is not None and settings.comfy_install_dir is not None
+        if hold and hold.get("backend_url") != settings.comfy_url.rstrip("/"):
+            return {"ok": False, "backend": "comfyui", "isSimulation": False,
+                    "presetId": presetId or settings.preset_id,
+                    "dependencyIdentityConfigured": configured, "executorHeld": True,
+                    "error": {"code": "executor_connection_mismatch",
+                              "message": "An outstanding execution belongs to another or unknown ComfyUI connection. Restore its original connection or complete operator recovery before generation can continue."}}
         try:
-            result = await app.state.backend.preflight(settings.preset_id)
-            return {**result, "backend": "comfyui", "isSimulation": False}
+            result = await app.state.backend.preflight(presetId or settings.preset_id)
+            if not configured:
+                result["ok"] = False
+                result["error"] = {"code": "dependency_identity_unavailable", "message": "Configure local model and source directories before accepting new GPU tasks."}
+            return {**result, "backend": "comfyui", "isSimulation": False,
+                    "dependencyIdentityConfigured": configured,
+                    "executorHeld": hold is not None}
         except ComfyError as exc:
             return JSONResponse({"ok": False, "backend": "comfyui", "error": {"code": exc.code, "message": str(exc)[:500]}}, status_code=503)
 
@@ -202,9 +221,8 @@ def create_app(settings: Settings) -> FastAPI:
         if len(metadata.encode("utf-8")) > 16384:
             raise invalid(ValueError("metadata exceeds 16 KiB"))
         try:
-            meta = validate_metadata(json.loads(metadata))
-            if meta["workflowPreset"] != settings.preset_id:
-                raise ValueError("workflowPreset does not match this server's configured backend")
+            # Validate shape first; replay remains available after a preset was disabled or removed.
+            meta = validate_metadata(json.loads(metadata), allowed_presets=None)
             if settings.backend == "comfyui":
                 width, height = meta["inputSize"].values()
                 if not meta["prompt"].strip():
@@ -214,12 +232,31 @@ def create_app(settings: Settings) -> FastAPI:
             image_data = await upload_bytes(image, MAX_IMAGE_BYTES)
             mask_data = await upload_bytes(mask, MAX_IMAGE_BYTES)
             request_hash = Store.fingerprint(meta, image_data, mask_data, settings.backend)
+            previous = await asyncio.to_thread(store.lookup_request, meta["clientRequestId"], request_hash)
+            if previous:
+                return JSONResponse(public_job(previous), status_code=200)
+            if settings.backend == "mock" and meta["workflowPreset"] != settings.preset_id:
+                raise ValueError("workflowPreset does not match this server's configured backend")
             image_data, mask_data = await asyncio.to_thread(normalize_inputs, image_data, mask_data, meta)
-            record, created = await asyncio.to_thread(store.create, meta, image_data, mask_data, settings.backend, request_hash)
+            execution = await app.state.backend.freeze(meta) if settings.backend == "comfyui" else None
+            if execution:
+                import hashlib
+                execution["normalizedInputs"] = {"imageSha256": hashlib.sha256(image_data).hexdigest(),
+                                                 "maskSha256": hashlib.sha256(mask_data).hexdigest()}
+            record, created = await asyncio.to_thread(store.create, meta, image_data, mask_data, settings.backend, request_hash,
+                execution_snapshot=execution, max_pending=settings.max_pending_jobs, max_pending_bytes=settings.max_pending_bytes)
         except RequestConflict as exc:
             raise HTTPException(409, detail={"code": "request_conflict", "message": str(exc)}) from None
+        except QueueFull as exc:
+            raise HTTPException(429, detail={"code": "queue_full", "message": str(exc)}, headers={"Retry-After": "5"}) from None
         except (ValueError, TypeError) as exc:
             raise invalid(exc) from None
+        except Exception as exc:
+            from .comfy import ComfyError
+            if isinstance(exc, ComfyError):
+                status = 422 if exc.code in {"invalid_crop", "invalid_prompt", "invalid_seed", "unknown_preset"} else 503
+                raise HTTPException(status, detail={"code": exc.code, "message": str(exc)[:500]}) from None
+            raise
         return JSONResponse(public_job(record), status_code=202 if created else 200)
 
     @app.get("/v1/jobs", dependencies=[Depends(authenticated)])
