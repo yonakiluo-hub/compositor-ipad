@@ -21,6 +21,7 @@ struct EditorView: View {
     @State private var showRename = false
     @State private var candidateInsertion: CandidateInsertion?
     @State private var candidateRemoval: CandidateRemoval?
+    @State private var layerOrganization: LayerOrganizationContext?
     var body: some View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
@@ -238,6 +239,7 @@ struct EditorView: View {
             Picker("面板", selection: $panel) { Text("图层").tag(0); Text("AI 工作台").tag(1) }.pickerStyle(.segmented).padding(14)
             if panel == 0 { layersPanel } else { aiPanel }
         }
+        .sheet(item: $layerOrganization) { context in LayerOrganizationSheet(model: model, context: context) }
     }
     private var layersPanel: some View {
         VStack(spacing: 0) {
@@ -247,6 +249,8 @@ struct EditorView: View {
                 Button(model.isLayerMultiSelecting ? "完成" : "多选") {
                     model.setLayerMultiSelecting(!model.isLayerMultiSelecting)
                 }.font(.caption).accessibilityIdentifier("layers.multiselect")
+                Button { layerOrganization = model.beginLayerOrganization() } label: { Image(systemName: "folder.badge.gearshape") }
+                    .disabled(model.selectedLayerIDs.isEmpty).accessibilityLabel("整理图层").accessibilityIdentifier("layers.organize")
                 Button { model.addLayer(group: true) } label: { Image(systemName: "folder.badge.plus") }.accessibilityLabel("新建图层组")
                 Button { model.addLayer() } label: { Image(systemName: "plus") }.accessibilityLabel("新建图层").accessibilityIdentifier("layer.add")
             }.padding(.horizontal, 16).padding(.bottom, 12)
@@ -257,7 +261,7 @@ struct EditorView: View {
                     }
                 }.padding(.horizontal, 10)
             }.accessibilityIdentifier("layers.rows")
-            if model.isLayerMultiSelecting { multiLayerControls }
+            if model.isLayerMultiSelecting { ScrollView { multiLayerControls }.frame(maxHeight: 310) }
             else if let layer = model.activeLayer {
                 ScrollView { layerControls(layer) }.frame(maxHeight: layer.maskPNGData == nil ? 310 : 400)
                     .accessibilityIdentifier("layers.controls")

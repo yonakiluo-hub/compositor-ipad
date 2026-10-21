@@ -1,6 +1,49 @@
 import Foundation
 
+struct LayerOrganizationContext: Identifiable {
+    let id = UUID()
+    let documentID: UUID
+    let revision: Int64
+    let selectedIDs: Set<UUID>
+}
+
+enum LayerOrganizationAction {
+    case move(parentID: UUID?, position: LayerInsertionPosition)
+    case group, moveOut
+}
+
 extension EditorModel {
+    func beginLayerOrganization() -> LayerOrganizationContext {
+        cancelTransform()
+        return LayerOrganizationContext(documentID: document.id, revision: document.revision, selectedIDs: selectedLayerIDs)
+    }
+
+    func layerOrganizationPlan(_ context: LayerOrganizationContext, action: LayerOrganizationAction) throws -> LayerOrganizationPlan {
+        guard document.id == context.documentID, document.revision == context.revision,
+              selectedLayerIDs == context.selectedIDs else { throw LayerOrganizationError.stalePlan }
+        switch action {
+        case .move(let parent, let position):
+            return try LayerOrganization.movePlan(document: document, selectedIDs: context.selectedIDs, into: parent, position: position)
+        case .group: return try LayerOrganization.groupPlan(document: document, selectedIDs: context.selectedIDs)
+        case .moveOut: return try LayerOrganization.moveOutPlan(document: document, selectedIDs: context.selectedIDs)
+        }
+    }
+
+    @discardableResult
+    func organizeLayers(_ context: LayerOrganizationContext, action: LayerOrganizationAction) -> Bool {
+        do {
+            let plan = try layerOrganizationPlan(context, action: action)
+            let previous = document.revision
+            cancelTransform()
+            try editor.organizeLayers(plan)
+            if plan.groupID != nil { isLayerMultiSelecting = false }
+            layerEditTarget = .pixels
+            changed()
+            status = previous == document.revision ? "图层已在此位置" : "已整理图层 · 可一步撤销"
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+
     var clippingIssue: String? {
         guard let layer = activeLayer, !layer.isGroup else { return "请选择一个普通图层。" }
         guard selectedLayerIDs.count <= 1 else { return "请先选择一个图层。" }
