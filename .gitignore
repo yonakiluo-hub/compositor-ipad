@@ -15,8 +15,11 @@ Thumbs.db
 .env.*
 !.env.example
 pairing.json
+pairing.pending.json
 access-token.txt
 connection-private.json
+launcher-private.json
+.launcher-*.tmp
 *.key
 *.pem
 *.p12
