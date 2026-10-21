@@ -12,6 +12,8 @@ xcodebuild -project "$project_dir/CompositorPad.xcodeproj" \
   -configuration Debug -sdk iphonesimulator \
   SYMROOT="$build_dir/Build/Products" OBJROOT="$build_dir/Build/Intermediates.noindex" \
   CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
+# Fresh CI simulators must finish booting before XCTest launches the app.
+xcrun simctl bootstatus "$simulator_id" -b
 xcodebuild test-without-building \
   -xctestrun "$build_dir/Build/Products/CompositorPad.xctestrun" \
   -destination "platform=iOS Simulator,id=$simulator_id" \
