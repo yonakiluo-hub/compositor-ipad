@@ -11,6 +11,11 @@ final class DocumentRenderer {
     private var images: [UUID: (Data, CGImage)] = [:]
     private var masks: [UUID: (Data, CGImage)] = [:]
     private let ciContext = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+    private let groupMaskWorkingByteLimit: Int
+
+    init(groupMaskWorkingByteLimit: Int = GroupMaskRules.workingByteLimit) {
+        self.groupMaskWorkingByteLimit = groupMaskWorkingByteLimit
+    }
 
     func image(for layer: RasterLayer) throws -> CGImage? {
         guard let data = layer.pngData else { return nil }
@@ -21,6 +26,10 @@ final class DocumentRenderer {
     }
     func clearCache() { images.removeAll(); masks.removeAll() }
     func pixelSize(of layer: RasterLayer) throws -> CGSize {
+        if layer.isGroup, let data = layer.maskPNGData {
+            let size = try PNGAsset.inspect(data, requireGrayscale: true)
+            return CGSize(width: size.width, height: size.height)
+        }
         if let image = try image(for: layer) { return CGSize(width: image.width, height: image.height) }
         return CGSize(width: max(1, Int(layer.transform.size.width)), height: max(1, Int(layer.transform.size.height)))
     }
@@ -48,7 +57,7 @@ final class DocumentRenderer {
     /// Passing nil here removes the mask for this preview; omitting this argument
     /// uses the original mask through the overload above. The temporary mask
     /// never enters the original layer's decoded mask cache.
-    func render(_ document: CanvasDocument, replacing layerID: UUID, with replacement: CGImage,
+    func render(_ document: CanvasDocument, replacing layerID: UUID, with replacement: CGImage?,
                 replacementMask: CGImage?) throws -> CGImage {
         try render(document, replacing: layerID, with: replacement, maskReplacement: .replacement(replacementMask))
     }
@@ -70,10 +79,14 @@ final class DocumentRenderer {
 
     private func composite(_ layers: [RasterLayer], bounds: CGRect, replacing layerID: UUID?,
                            with replacement: CGImage?, maskReplacement: MaskReplacement) throws -> CGImage {
+        try LayerHierarchy.validate(layers)
+        try GroupMaskRules.validate(layers, bounds: bounds, limit: groupMaskWorkingByteLimit)
         let width = Int(bounds.width), height = Int(bounds.height)
         let context = try RasterImage.context(width: width, height: height)
         context.translateBy(x: -bounds.minX, y: -bounds.minY)
         let entries = LayerHierarchy.entries(layers)
+        let byID = Dictionary(uniqueKeysWithValues: entries.map { ($0.layer.id, $0) })
+        let siblings = Dictionary(grouping: layers, by: \.parentID)
         let clipped = Dictionary(grouping: entries.filter { $0.layer.maskSourceID != nil }, by: { $0.layer.maskSourceID! })
         func drawOwn(_ entry: LayerHierarchyEntry, in target: CGContext, mode: LayerBlendMode? = nil) throws {
             let layer = entry.layer
@@ -85,9 +98,9 @@ final class DocumentRenderer {
             try drawLayer(layer, image: image, context: target,
                           maskReplacement: layer.id == layerID ? maskReplacement : .original)
         }
-        for entry in entries where entry.isVisible && !entry.layer.isGroup && entry.layer.maskSourceID == nil {
+        func drawStack(_ entry: LayerHierarchyEntry, in target: CGContext, bounds: CGRect) throws {
             let children = (clipped[entry.layer.id] ?? []).filter(\.isVisible)
-            guard !children.isEmpty else { try drawOwn(entry, in: context); continue }
+            guard !children.isEmpty else { try drawOwn(entry, in: target); return }
             // Ported from Compositor LiveMaskRenderer and BrushPixels.c at
             // 7c2a5a4, MIT © 2026 Wonder Assembly LLC. Stack colors are composed
             // on an opaque base, then its original coverage is restored ONCE.
@@ -102,7 +115,7 @@ final class DocumentRenderer {
             let quad = CGRect(x: x, y: y, width: corners.map(\.x).max()! - x,
                               height: corners.map(\.y).max()! - y)
             let region = quad.insetBy(dx: -2, dy: -2).integral.intersection(bounds)
-            guard !region.isNull, !region.isEmpty else { continue }
+            guard !region.isNull, !region.isEmpty else { return }
             let stackWidth = Int(region.width), stackHeight = Int(region.height)
             let stack = try RasterImage.context(width: stackWidth, height: stackHeight)
             stack.translateBy(x: -region.minX, y: -region.minY)
@@ -129,15 +142,86 @@ final class DocumentRenderer {
                 }
             }
             guard let image = stack.makeImage() else { throw RasterError.allocation }
-            context.saveGState()
-            context.setBlendMode(entry.layer.blendMode.cgMode)
-            RasterImage.draw(image, in: region, context: context)
-            context.restoreGState()
+            target.saveGState()
+            target.setBlendMode(entry.layer.blendMode.cgMode)
+            RasterImage.draw(image, in: region, context: target)
+            target.restoreGState()
         }
+        func drawChildren(_ parent: UUID?, in target: CGContext, bounds: CGRect) throws {
+            for layer in siblings[parent] ?? [] {
+                guard let entry = byID[layer.id], entry.isVisible else { continue }
+                if layer.isGroup {
+                    let selectedMask = layer.id == layerID ? maskReplacement : .original
+                    if layer.maskEnabled, let mask = try maskImage(for: layer, replacement: selectedMask) {
+                        try drawMaskedGroup(layer, mask: mask, in: target, bounds: bounds) { group, region in
+                            try drawChildren(layer.id, in: group, bounds: region)
+                        }
+                    } else { try drawChildren(layer.id, in: target, bounds: bounds) }
+                } else if layer.maskSourceID == nil { try drawStack(entry, in: target, bounds: bounds) }
+            }
+        }
+        try drawChildren(nil, in: context, bounds: bounds)
         // A hidden base hides its clipping stack; a hidden child never breaks
         // the remaining siblings' stack. Arbitrary live-mask graphs are rejected.
         guard let image = context.makeImage() else { throw RasterError.allocation }
         return image
+    }
+
+    /// Preserve pass-through blending by interpolating the group's before/after
+    /// backdrop in premultiplied RGBA. Applying a soft clip to each child would
+    /// thicken overlap coverage. This rule is deliberately distinct from upstream
+    /// FolderMaskClip; GroupMaskRules identifies it in persisted iPad state.
+    private func drawMaskedGroup(_ layer: RasterLayer, mask: CGImage, in target: CGContext, bounds: CGRect,
+                                 draw: (CGContext, CGRect) throws -> Void) throws {
+        let region = GroupMaskRules.region(for: layer, within: bounds)
+        guard !region.isNull, !region.isEmpty else { return }
+        let width = Int(region.width), height = Int(region.height)
+        guard let before = target.makeImage(), let raw = before.dataProvider?.data,
+              let old = CFDataGetBytePtr(raw), CFDataGetLength(raw) >= before.bytesPerRow * before.height
+        else { throw RasterError.allocation }
+        let after = try RasterImage.context(width: width, height: height)
+        after.translateBy(x: -region.minX, y: -region.minY)
+        after.interpolationQuality = .none; after.setBlendMode(.copy)
+        RasterImage.draw(before, in: bounds, context: after)
+        after.setBlendMode(.normal)
+        try draw(after, region)
+        let coverage = try RasterImage.context(width: width, height: height, gray: true)
+        coverage.translateBy(x: -region.minX, y: -region.minY)
+        let t = layer.transform
+        coverage.translateBy(x: t.center.x, y: t.center.y); coverage.rotate(by: t.radians)
+        coverage.scaleBy(x: t.flipX ? -1 : 1, y: t.flipY ? -1 : 1)
+        coverage.interpolationQuality = t.sampling.quality
+        let rect = CGRect(x: -t.size.width / 2, y: -t.size.height / 2, width: t.size.width, height: t.size.height)
+        RasterImage.clip(mask, to: rect, context: coverage)
+        coverage.setFillColor(gray: 1, alpha: 1); coverage.fill(rect)
+        guard let result = after.data?.assumingMemoryBound(to: UInt8.self),
+              let weights = coverage.data?.assumingMemoryBound(to: UInt8.self) else { throw RasterError.allocation }
+        let dx = Int(region.minX - bounds.minX), dy = Int(region.minY - bounds.minY)
+        for y in 0..<height { for x in 0..<width {
+            let weight = Int(weights[y * coverage.bytesPerRow + x])
+            let source = (dy + y) * before.bytesPerRow + (dx + x) * 4
+            let destination = y * after.bytesPerRow + x * 4
+            for channel in 0..<4 {
+                result[destination + channel] = UInt8((Int(old[source + channel]) * (255 - weight)
+                    + Int(result[destination + channel]) * weight + 127) / 255)
+            }
+        } }
+        guard let image = after.makeImage() else { throw RasterError.allocation }
+        target.saveGState(); defer { target.restoreGState() }
+        target.setBlendMode(.copy)
+        RasterImage.draw(image, in: region, context: target)
+    }
+
+    private func maskImage(for layer: RasterLayer, replacement: MaskReplacement) throws -> CGImage? {
+        switch replacement {
+        case .replacement(let image): return image
+        case .original:
+            guard let data = layer.maskPNGData else { return nil }
+            if let hit = masks[layer.id], hit.0 == data { return hit.1 }
+            let image = try RasterImage.decode(data)
+            masks[layer.id] = (data, image)
+            return image
+        }
     }
     func drawLayer(_ layer: RasterLayer, image: CGImage, context: CGContext) throws {
         try drawLayer(layer, image: image, context: context, maskReplacement: .original)
@@ -153,21 +237,7 @@ final class DocumentRenderer {
                           width: transform.size.width, height: transform.size.height)
         context.interpolationQuality = transform.sampling.quality
         if layer.maskEnabled {
-            let mask: CGImage?
-            switch maskReplacement {
-            case .replacement(let replacement):
-                mask = replacement
-            case .original:
-                if let data = layer.maskPNGData {
-                    if let hit = masks[layer.id], hit.0 == data { mask = hit.1 }
-                    else {
-                        let decoded = try RasterImage.decode(data)
-                        masks[layer.id] = (data, decoded)
-                        mask = decoded
-                    }
-                } else { mask = nil }
-            }
-            if let mask { RasterImage.clip(mask, to: rect, context: context) }
+            if let mask = try maskImage(for: layer, replacement: maskReplacement) { RasterImage.clip(mask, to: rect, context: context) }
         }
         RasterImage.draw(image, in: rect, context: context)
     }
@@ -198,9 +268,9 @@ final class DocumentRenderer {
             let canvas = CGSize(width: width, height: height)
             let plans = try document.layers.map { try expansionPlan($0, canvas: canvas) }
             var pixels = 0, maskPixels = 0
-            for (layer, plan) in zip(document.layers, plans) where !layer.isGroup {
+            for (layer, plan) in zip(document.layers, plans) {
                 let size = try pixelSize(of: layer)
-                pixels += plan.map { Int($0.bounds.width * $0.bounds.height) } ?? Int(size.width * size.height)
+                if !layer.isGroup { pixels += plan.map { Int($0.bounds.width * $0.bounds.height) } ?? Int(size.width * size.height) }
                 if let plan, let mask = plan.maskSize { maskPixels += Int(mask.width * mask.height) }
                 else if let data = layer.maskPNGData { let size = try PNGAsset.inspect(data); maskPixels += size.width * size.height }
             }
@@ -221,7 +291,7 @@ final class DocumentRenderer {
     }
 
     private func expansionPlan(_ layer: RasterLayer, canvas: CGSize) throws -> ExpansionPlan? {
-        guard !layer.isGroup else { return nil }
+        guard !layer.isGroup || layer.maskPNGData != nil else { return nil }
         let size = try pixelSize(of: layer), mapping = pixelToDocument(layer, size: size)
         let corners = [CGPoint.zero, CGPoint(x: canvas.width, y: 0),
                        CGPoint(x: 0, y: canvas.height), CGPoint(x: canvas.width, y: canvas.height)]
@@ -282,13 +352,15 @@ final class DocumentRenderer {
 
     private func expanded(_ layer: RasterLayer, plan: ExpansionPlan) throws -> RasterLayer {
         var result = layer
-        let context = try RasterImage.context(width: Int(plan.bounds.width), height: Int(plan.bounds.height))
-        context.interpolationQuality = .none; context.setBlendMode(.copy)
-        if let source = try image(for: layer) {
-            RasterImage.draw(source, in: CGRect(origin: CGPoint(x: -plan.bounds.minX, y: -plan.bounds.minY), size: plan.oldSize), context: context)
+        if !layer.isGroup {
+            let context = try RasterImage.context(width: Int(plan.bounds.width), height: Int(plan.bounds.height))
+            context.interpolationQuality = .none; context.setBlendMode(.copy)
+            if let source = try image(for: layer) {
+                RasterImage.draw(source, in: CGRect(origin: CGPoint(x: -plan.bounds.minX, y: -plan.bounds.minY), size: plan.oldSize), context: context)
+            }
+            guard let image = context.makeImage() else { throw RasterError.allocation }
+            result.pngData = try RasterImage.png(image)
         }
-        guard let image = context.makeImage() else { throw RasterError.allocation }
-        result.pngData = try RasterImage.png(image)
         if let data = layer.maskPNGData, let size = plan.maskSize {
             let source = try RasterImage.decode(data)
             guard source.bitsPerPixel == 8, source.bitsPerComponent == 8, source.alphaInfo == .none,

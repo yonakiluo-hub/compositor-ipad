@@ -38,8 +38,8 @@ final class LayerMaskStrokeSession {
 
     init(model: EditorModel) throws {
         guard model.layerEditTarget == .mask, [.brush, .eraser].contains(model.tool),
-              model.selectedLayerIDs.count <= 1, let layer = model.activeLayer, !layer.isGroup,
-              let data = layer.maskPNGData else { throw DocumentError.invalid("请选择普通图层的蒙版") }
+              model.selectedLayerIDs.count <= 1, let layer = model.activeLayer,
+              let data = layer.maskPNGData else { throw DocumentError.invalid("请选择图层或图层组的蒙版") }
         guard !model.document.isEffectivelyLocked(layer.id) else { throw DocumentError.lockedLayer }
         documentID = model.document.id; revision = model.document.revision
         self.layer = layer; selectionPNGData = model.document.selectionMaskPNGData
@@ -53,7 +53,8 @@ final class LayerMaskStrokeSession {
             brushToPixels: model.renderer.pixelToDocument(layer, size: size).inverted())
         if let source = try model.renderer.image(for: layer) { sourcePixels = source }
         else {
-            let pixelSize = try model.renderer.pixelSize(of: layer)
+            // A group preview reads its children, never this placeholder image.
+            let pixelSize = try layer.isGroup ? CGSize(width: 1, height: 1) : model.renderer.pixelSize(of: layer)
             let context = try RasterImage.context(width: Int(pixelSize.width), height: Int(pixelSize.height))
             guard let image = context.makeImage() else { throw RasterError.allocation }
             sourcePixels = image
@@ -82,37 +83,40 @@ extension EditorModel {
 
     func normalizeLayerEditTarget() {
         if layerEditTarget == .mask &&
-            (activeLayer?.isGroup != false || activeLayer?.maskPNGData == nil || selectedLayerIDs.count > 1) {
+            (activeLayer?.maskPNGData == nil || selectedLayerIDs.count > 1) {
             layerEditTarget = .pixels
         }
     }
 
     func setLayerEditTarget(_ target: LayerEditTarget) {
         guard target == .pixels ||
-            (activeLayer?.isGroup == false && activeLayer?.maskPNGData != nil && selectedLayerIDs.count <= 1) else { return }
+            (activeLayer?.maskPNGData != nil && selectedLayerIDs.count <= 1) else { return }
         cancelTransform()
         layerEditTarget = target
         if target == .mask { tool = .brush }
     }
 
     func addLayerMask() {
-        guard let layer = activeLayer, !layer.isGroup, layer.maskPNGData == nil, selectedLayerIDs.count <= 1 else { return }
+        guard let layer = activeLayer, layer.maskPNGData == nil, selectedLayerIDs.count <= 1 else { return }
         report {
-            let size = try renderer.pixelSize(of: layer)
+            let size = try layer.isGroup ? document.size : renderer.pixelSize(of: layer)
             let data = try RasterImage.png(RasterImage.solidMask(width: Int(size.width), height: Int(size.height), white: true))
-            updateLayer("添加图层蒙版") { $0.maskPNGData = data; $0.maskEnabled = true }
+            updateLayer(layer.isGroup ? "添加组蒙版" : "添加图层蒙版") {
+                if $0.isGroup { $0.transform = LayerTransform(size: size, sampling: .nearest) }
+                $0.maskPNGData = data; $0.maskEnabled = true
+            }
             if activeLayer?.maskPNGData != nil { setLayerEditTarget(.mask) }
         }
     }
 
     func removeLayerMask() {
-        guard activeLayer?.isGroup == false, activeLayer?.maskPNGData != nil, selectedLayerIDs.count <= 1 else { return }
+        guard activeLayer?.maskPNGData != nil, selectedLayerIDs.count <= 1 else { return }
         updateLayer("删除图层蒙版") { $0.maskPNGData = nil }
         normalizeLayerEditTarget()
     }
 
     func setLayerMaskEnabled(_ enabled: Bool) {
-        guard activeLayer?.isGroup == false, activeLayer?.maskPNGData != nil, selectedLayerIDs.count <= 1 else { return }
+        guard activeLayer?.maskPNGData != nil, selectedLayerIDs.count <= 1 else { return }
         updateLayer(enabled ? "启用图层蒙版" : "停用图层蒙版") { $0.maskEnabled = enabled }
     }
 
@@ -128,7 +132,7 @@ extension EditorModel {
     }
 
     func fillLayerMask(reveal: Bool) {
-        guard let layer = activeLayer, !layer.isGroup, let data = layer.maskPNGData, selectedLayerIDs.count <= 1 else { return }
+        guard let layer = activeLayer, let data = layer.maskPNGData, selectedLayerIDs.count <= 1 else { return }
         report {
             let original = try RasterImage.decode(data)
             let size = CGSize(width: original.width, height: original.height), rect = CGRect(origin: .zero, size: size)
@@ -145,7 +149,7 @@ extension EditorModel {
     }
 
     func invertLayerMask() {
-        guard let layer = activeLayer, !layer.isGroup, let data = layer.maskPNGData, selectedLayerIDs.count <= 1 else { return }
+        guard let layer = activeLayer, let data = layer.maskPNGData, selectedLayerIDs.count <= 1 else { return }
         report {
             let original = try RasterImage.decode(data)
             let size = CGSize(width: original.width, height: original.height), rect = CGRect(origin: .zero, size: size)
@@ -162,7 +166,7 @@ extension EditorModel {
     }
 
     func layerMaskToSelection() {
-        guard let layer = activeLayer, !layer.isGroup, let data = layer.maskPNGData, selectedLayerIDs.count <= 1 else { return }
+        guard let layer = activeLayer, let data = layer.maskPNGData, selectedLayerIDs.count <= 1 else { return }
         report {
             let mask = try RasterImage.decode(data)
             let context = try RasterImage.context(width: document.width, height: document.height, gray: true)

@@ -51,6 +51,7 @@ public enum DocumentStore {
         let lockedLayerIDs: Set<UUID>
         let appliedAIResults: Set<AIResultKey>
         let selectionFile: String?
+        let groupMaskCompositing: String?
     }
 
     public static func save(_ document: CanvasDocument, to url: URL) throws {
@@ -83,7 +84,8 @@ public enum DocumentStore {
         let state = IPadState(documentID: document.id, manifestSHA256: digest(metadata), name: document.name,
                               revision: document.revision, lockedLayerIDs: Set(document.layers.filter(\.isLocked).map(\.id)),
                               appliedAIResults: document.appliedAIResults,
-                              selectionFile: document.selectionMaskPNGData == nil ? nil : "selection.png")
+                              selectionFile: document.selectionMaskPNGData == nil ? nil : "selection.png",
+                              groupMaskCompositing: document.layers.contains { $0.isGroup && $0.maskPNGData != nil } ? GroupMaskRules.semantics : nil)
         let stateBytes = try encoder.encode(state)
         guard stateBytes.count <= manifestLimit else { throw DocumentError.tooLarge }
         var files = ["manifest.json": FileWrapper(regularFileWithContents: metadata),
@@ -156,6 +158,7 @@ public enum DocumentStore {
             catch { throw DocumentError.invalid("iPad 编辑状态损坏") }
             guard let state, state.format == "com.compositor.ipad-state", state.version == 1,
                   state.documentID == manifest.documentID, state.manifestSHA256 == digest(metadata),
+                  state.groupMaskCompositing == nil || state.groupMaskCompositing == GroupMaskRules.semantics,
                   state.selectionFile == nil || state.selectionFile == "selection.png"
             else { throw DocumentError.invalid("iPad 编辑状态与工程清单不一致") }
             guard state.lockedLayerIDs.isSubset(of: Set(manifest.layers.map(\.id))) else { throw DocumentError.invalid("锁定图层引用无效") }
@@ -193,6 +196,9 @@ public enum DocumentStore {
                                parentID: record.parentID, isGroup: record.isGroup ?? false,
                                maskPNGData: try asset(record.maskFile, layerID: record.id, mask: true), maskEnabled: record.maskEnabled ?? true,
                                maskSourceID: record.maskSourceID)
+        }
+        if layers.contains(where: { $0.isGroup && $0.maskPNGData != nil }), state?.groupMaskCompositing != GroupMaskRules.semantics {
+            throw DocumentError.unsupported("组蒙版合成语义缺失或不兼容；请保留原 iPad 工程状态")
         }
         var selection: Data?
         if let selectionFile = state?.selectionFile {

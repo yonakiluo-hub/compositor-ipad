@@ -111,7 +111,7 @@ public enum LayerHierarchy {
         var byID: [UUID: RasterLayer] = [:]
         for layer in layers {
             guard byID.updateValue(layer, forKey: layer.id) == nil,
-                  !layer.isGroup || (layer.pngData == nil && layer.maskPNGData == nil && layer.maskSourceID == nil && layer.blendMode == .normal)
+                  !layer.isGroup || (layer.pngData == nil && layer.maskSourceID == nil && layer.blendMode == .normal)
             else { throw DocumentError.invalid("重复图层 ID 或不支持的图层组内容") }
         }
         // Compositor also supports arbitrary live-mask graphs. This iPad stage only
