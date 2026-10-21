@@ -284,7 +284,10 @@ struct EditorView: View {
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(
                             model.document.activeLayerID == layer.id && model.layerEditTarget == .pixels ? Color.accentColor : .clear, lineWidth: 2))
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(layer.name).lineLimit(1).foregroundStyle(.primary)
+                        HStack(spacing: 3) {
+                            if layer.maskSourceID != nil { Image(systemName: "arrow.turn.down.right").accessibilityLabel("剪贴图层") }
+                            Text(layer.name).lineLimit(1)
+                        }.foregroundStyle(.primary)
                         Text(layer.isGroup ? "穿透组" : "\(Int(layer.opacity * 100))% · \(layer.blendMode.rawValue)\(layer.maskPNGData == nil ? "" : " · 蒙版")").font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
@@ -317,6 +320,17 @@ struct EditorView: View {
                 Picker("混合模式", selection: Binding(get: { model.activeLayer?.blendMode ?? .normal }, set: { mode in model.updateLayer("混合模式") { $0.blendMode = mode } })) {
                     ForEach(LayerBlendMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.menu)
+                VStack(alignment: .leading, spacing: 5) {
+                    Button(layer.maskSourceID == nil ? "创建剪贴蒙版" : "释放剪贴蒙版") {
+                        model.setLayerClipping(layer.maskSourceID == nil)
+                    }.disabled(model.clippingIssue != nil).accessibilityIdentifier("layer.clipping")
+                    if let source = model.clippingSourceName {
+                        Text("限制在“\(source)”的不透明区域内，原像素保留。释放时，上方同组剪贴层也会释放。")
+                            .accessibilityIdentifier("layer.clippingSource")
+                    } else {
+                        Text(model.clippingIssue ?? "把本层限制在下方图层的轮廓内，可叠加上色与纹理。")
+                    }
+                }.font(.caption2).foregroundStyle(.secondary)
                 HStack {
                     Button("水平翻转") { model.updateLayer("翻转") { $0.transform.flipX.toggle() } }
                     Button("旋转 90°") { model.updateLayer("旋转") { $0.transform.rotation += 90 } }
@@ -410,12 +424,13 @@ struct EditorView: View {
                     if model.pairing != nil { Button("检查连接") { Task { await model.connect() } } }
                 }.font(.caption)
                 if model.pairing != nil {
+                    AIPresetPicker(model: model)
                     Text("生成描述").font(.subheadline.bold())
                     TextEditor(text: $model.prompt).frame(height: 100).padding(8).background(.black.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
                     Text(model.document.selectionMaskPNGData == nil ? "范围：全画布" : "范围：青色选区 + 周边上下文").font(.caption).foregroundStyle(.secondary)
                     Button { Task { await model.submitGeneration() } } label: {
                         HStack { if model.networkBusy { ProgressView() } else { Image(systemName: "sparkles") }; Text(model.networkBusy ? "正在提交…" : "生成候选"); Spacer() }
-                    }.buttonStyle(.borderedProminent).disabled(model.networkBusy || model.taskStore == nil).accessibilityIdentifier("ai.generate")
+                    }.buttonStyle(.borderedProminent).disabled(model.networkBusy || model.taskStore == nil || !model.canGenerateWithSelectedPreset).accessibilityIdentifier("ai.generate")
                     Button("恢复 / 刷新任务") { model.restartRecovery() }.font(.caption)
                     Button("备份当前分层工程到 Windows") { Task { await model.backupCurrentDocument() } }.font(.caption).disabled(model.networkBusy || model.taskStore == nil)
                     if !model.backupStatus.isEmpty { Text(model.backupStatus).font(.caption).foregroundStyle(.secondary) }
@@ -446,6 +461,8 @@ struct EditorView: View {
     private func jobCard(_ job: BridgeJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack { Text(job.isSimulation ? "模拟候选" : "生成候选").font(.subheadline.bold()); Spacer(); Text(stateName(job.state)).font(.caption) }
+            Text(model.capabilities?.preset(id: job.workflowPreset)?.displayName ?? job.workflowPreset)
+                .font(.caption2).foregroundStyle(.secondary).accessibilityIdentifier("candidate.preset.\(job.jobId)")
             if model.pendingDeletionJobIDs.contains(job.jobId) {
                 Text("删除尚未完成，恢复任务或再次删除可继续清理。").font(.caption).foregroundStyle(.secondary)
             } else if model.unavailableJobIDs.contains(job.jobId) {

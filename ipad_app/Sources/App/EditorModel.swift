@@ -37,6 +37,11 @@ final class EditorModel: ObservableObject {
     @Published var viewportRotationDegrees: Double = 0
     @Published var pairing: BridgePairing?
     @Published var capabilities: BridgeCapabilities?
+    @Published var selectedPresetID: String?
+    @Published var presetStatus: BridgeBackendStatus?
+    @Published var presetCheckMessage = ""
+    @Published var isCheckingPresets = false
+    var presetCheckOperation: UUID?
     @Published var jobs: [BridgeJob] = []
     @Published var candidates = CandidatePreviewCache()
     @Published var loadingCandidateKeys: Set<String> = []

@@ -93,16 +93,111 @@ public struct BridgePreset: Codable, Equatable, Sendable {
     public let technique: String
     public let nativeInpainting: Bool
     public let maskAppliedToOutput: Bool
+    public let name: String?
+    public let presetVersion: String?
+    public let experimental: Bool?
+    public let enabled: Bool?
+    public let configured: Bool?
+    public let error: BridgeServiceError?
+    public let license: BridgePresetLicense?
+    public let limits: BridgePresetLimits?
+    public let qualification: BridgePresetQualification?
+
+    private enum CodingKeys: String, CodingKey {
+        case id, technique, nativeInpainting, maskAppliedToOutput, name, presetVersion,
+             experimental, enabled, configured, error, license, limits, qualification
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        technique = try c.decode(String.self, forKey: .technique)
+        nativeInpainting = try c.decode(Bool.self, forKey: .nativeInpainting)
+        maskAppliedToOutput = try c.decode(Bool.self, forKey: .maskAppliedToOutput)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled)
+        configured = try c.decodeIfPresent(Bool.self, forKey: .configured)
+        let unavailable = enabled == false || configured == false
+        // v0.2 deliberately includes broken, configured=false registry entries.
+        // Their malformed optional descriptors must not hide a healthy default.
+        func detail<T: Decodable>(_ type: T.Type, _ key: CodingKeys) throws -> T? {
+            if unavailable { return try? c.decodeIfPresent(type, forKey: key) }
+            return try c.decodeIfPresent(type, forKey: key)
+        }
+        name = try detail(String.self, .name)
+        presetVersion = try detail(String.self, .presetVersion)
+        experimental = try detail(Bool.self, .experimental)
+        error = try detail(BridgeServiceError.self, .error)
+        license = try detail(BridgePresetLicense.self, .license)
+        limits = try detail(BridgePresetLimits.self, .limits)
+        qualification = try detail(BridgePresetQualification.self, .qualification)
+    }
+
+    public var displayName: String { name ?? (id == "mock-paint-v1" ? "模拟染色 · 不执行 AI" : id) }
+    /// Absent switches are the original v0.1 contract. Explicit false is never ignored.
+    public var isAvailable: Bool { enabled != false && configured != false && maskAppliedToOutput && !nativeInpainting }
+    public var unavailableReason: String? {
+        if enabled == false { return "Windows 尚未开启" }
+        if configured == false { return error?.message ?? "Windows 预设配置需要修复" }
+        if !maskAppliedToOutput || nativeInpainting { return "此生成方式尚不受当前客户端支持" }
+        return nil
+    }
+}
+public struct BridgePresetLicense: Codable, Equatable, Sendable {
+    public let id: String?
+    public let url: String?
+    public let use: String?
+    public let scope: String?
+    public let commercialUse: String?
+    public let commercialLicenseRequired: Bool?
+
+    public var summary: String {
+        if use == "research_or_evaluation_only" || commercialLicenseRequired == true {
+            return "仅供研究或评估；商业使用需另获模型许可"
+        }
+        if commercialUse == "permitted_subject_to_license" {
+            return "遵守 \(id ?? "模型") 许可及相关依赖许可"
+        }
+        return id.map { "许可：" + $0 } ?? "服务未提供许可用途说明"
+    }
+}
+public struct BridgePresetLimits: Codable, Equatable, Sendable {
+    public let minimumInputSide: Int?
+    public let maximumAspectRatio: Double?
+    public let maxInputPixels: Int?
+}
+public struct BridgePresetQualification: Codable, Equatable, Sendable {
+    public let installed: String?
+    public let structuralPreflight: String?
+    public let gpuSmoke: String?
+    public let qualityAdmission: String?
+}
+public struct BridgeInputLimits: Equatable, Sendable {
+    public let minimumSide: Int
+    public let maximumAspectRatio: Double?
+    public let maximumPixels: Int
+
+    public func validate(width: Int, height: Int) throws {
+        guard width >= minimumSide, height >= minimumSide else {
+            throw BridgeError.invalidInput("此组合要求生成区域的短边至少 \(minimumSide) 像素")
+        }
+        guard width > 0, height > 0, width <= 30000, height <= 30000,
+              width * height <= maximumPixels else {
+            throw BridgeError.invalidInput("生成区域超过此组合的 \(maximumPixels) 像素限制，请缩小选区；本地画布不会被缩小")
+        }
+        if let maximumAspectRatio, Double(max(width, height)) / Double(min(width, height)) > maximumAspectRatio {
+            throw BridgeError.invalidInput("生成区域长宽比超过此组合的 \(maximumAspectRatio):1 限制，请增加上下文")
+        }
+    }
 }
 public struct BridgeCapabilities: Codable, Equatable, Sendable {
     public let protocolVersion: Int
     public let backend: String
     public let isSimulation: Bool
     public let presets: [BridgePreset]
+    public let defaultPreset: String?
     public let maxInputPixels: Int
     public let maxImageBytes: Int
     public let minInputSide: Int
-    public let maxInputAspectRatio: Int?
+    public let maxInputAspectRatio: Double?
     public let maxSnapshotBytes: Int
     public let snapshotFormat: String
     public let progressTransport: String
@@ -113,7 +208,7 @@ public struct BridgeCapabilities: Codable, Equatable, Sendable {
     public let jobDeletionSupported: Bool
 
     private enum CodingKeys: String, CodingKey {
-        case protocolVersion, backend, isSimulation, presets, maxInputPixels, maxImageBytes,
+        case protocolVersion, backend, isSimulation, presets, defaultPreset, maxInputPixels, maxImageBytes,
              minInputSide, maxInputAspectRatio, maxSnapshotBytes, snapshotFormat,
              progressTransport, cancelSupported, pairingScope, resultAlphaMode, jobDeletionSupported
     }
@@ -124,10 +219,11 @@ public struct BridgeCapabilities: Codable, Equatable, Sendable {
         backend = try c.decode(String.self, forKey: .backend)
         isSimulation = try c.decode(Bool.self, forKey: .isSimulation)
         presets = try c.decode([BridgePreset].self, forKey: .presets)
+        defaultPreset = try c.decodeIfPresent(String.self, forKey: .defaultPreset)
         maxInputPixels = try c.decode(Int.self, forKey: .maxInputPixels)
         maxImageBytes = try c.decode(Int.self, forKey: .maxImageBytes)
         minInputSide = try c.decode(Int.self, forKey: .minInputSide)
-        maxInputAspectRatio = try c.decodeIfPresent(Int.self, forKey: .maxInputAspectRatio)
+        maxInputAspectRatio = try c.decodeIfPresent(Double.self, forKey: .maxInputAspectRatio)
         maxSnapshotBytes = try c.decode(Int.self, forKey: .maxSnapshotBytes)
         snapshotFormat = try c.decode(String.self, forKey: .snapshotFormat)
         progressTransport = try c.decode(String.self, forKey: .progressTransport)
@@ -136,8 +232,24 @@ public struct BridgeCapabilities: Codable, Equatable, Sendable {
         resultAlphaMode = try c.decode(String.self, forKey: .resultAlphaMode)
         jobDeletionSupported = try c.decodeIfPresent(Bool.self, forKey: .jobDeletionSupported) ?? false
     }
+
+    /// Do not silently choose an experimental alternative if the advertised default fails.
+    public var defaultPresetID: String? { defaultPreset ?? presets.first?.id }
+    public func preset(id: String) -> BridgePreset? { presets.first { $0.id == id } }
+    public func inputLimits(for preset: BridgePreset) throws -> BridgeInputLimits {
+        let minimumSide = max(minInputSide, preset.limits?.minimumInputSide ?? minInputSide)
+        let maximumPixels = min(4_194_304, maxInputPixels, preset.limits?.maxInputPixels ?? maxInputPixels)
+        let ratios = [maxInputAspectRatio, preset.limits?.maximumAspectRatio].compactMap { $0 }
+        guard minimumSide > 0, minimumSide <= 30000, maximumPixels > 0,
+              ratios.allSatisfy({ $0.isFinite && $0 >= 1 }),
+              preset.limits?.minimumInputSide == nil || preset.limits!.minimumInputSide! > 0,
+              preset.limits?.maxInputPixels == nil || preset.limits!.maxInputPixels! > 0 else {
+            throw BridgeError.invalidResponse("预设的输入限制无效")
+        }
+        return BridgeInputLimits(minimumSide: minimumSide, maximumAspectRatio: ratios.min(), maximumPixels: maximumPixels)
+    }
 }
-public struct BridgeBackendStatus: Decodable, Sendable {
+public struct BridgeBackendStatus: Decodable, Equatable, Sendable {
     public let ok: Bool
     public let backend: String
     public let isSimulation: Bool?
@@ -146,7 +258,18 @@ public struct BridgeBackendStatus: Decodable, Sendable {
     public let missingNodes: [String]?
     public let missingModels: [String]?
     public let invalidInputs: [String]?
+    public let installed: Bool?
+    public let structuralPreflight: Bool?
+    public let gpuSmoke: String?
+    public let qualityAdmission: String?
+    public let executorHeld: Bool?
     public let error: BridgeServiceError?
+
+    public var problem: String? {
+        guard !ok else { return nil }
+        let missing = (missingNodes ?? []) + (missingModels ?? []) + (invalidInputs ?? [])
+        return error?.message ?? (missing.isEmpty ? "此组合尚未就绪，请检查 Windows" : "Windows 缺少：" + missing.joined(separator: "、"))
+    }
 }
 public struct BridgeServiceError: Codable, Equatable, Sendable {
     public let code: String
@@ -189,14 +312,10 @@ public struct BridgeJobMetadata: Codable, Equatable, Sendable {
               inputSize.width * inputSize.height <= min(capabilities?.maxInputPixels ?? 4_194_304, 4_194_304),
               try bridgeJSON(self).count <= 16384 else { throw BridgeError.invalidInput("裁切尺寸、坐标或 metadata 大小无效") }
         if let capabilities {
-            guard capabilities.presets.contains(where: { $0.id == workflowPreset }),
-                  min(inputSize.width, inputSize.height) >= capabilities.minInputSide else {
-                throw BridgeError.invalidInput("预设或裁切最短边不符合当前后端能力")
+            guard let preset = capabilities.preset(id: workflowPreset), preset.isAvailable else {
+                throw BridgeError.invalidInput("所选组合已关闭或配置有误，请重新检查连接并选择")
             }
-            if let ratio = capabilities.maxInputAspectRatio,
-               Double(max(inputSize.width, inputSize.height)) / Double(min(inputSize.width, inputSize.height)) > Double(ratio) {
-                throw BridgeError.invalidInput("裁切长宽比过大，请增加上下文")
-            }
+            try capabilities.inputLimits(for: preset).validate(width: inputSize.width, height: inputSize.height)
             if !capabilities.isSimulation && prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 throw BridgeError.invalidInput("请输入生成提示词")
             }

@@ -224,6 +224,10 @@ final class SelectionWorkflowTests: XCTestCase {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [SelectionSubmissionProtocol.self]
         model.pairing = pairing; model.bridge = try BridgeClient(pairing: pairing, configuration: configuration)
+        await model.connect()
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.selectedPresetID, "mock-paint-v1")
+        XCTAssertTrue(model.canGenerateWithSelectedPreset)
         await model.submitGeneration()
         XCTAssertTrue(model.errorMessage?.contains("fixture_upload_stopped") == true, "The fixture stops after the app prepares its actual immutable upload")
         let store = try XCTUnwrap(model.taskStore)
@@ -265,6 +269,8 @@ private final class SelectionSubmissionProtocol: URLProtocol {
             data = Data(#"{"protocolVersion":1,"backend":"mock","isSimulation":true,"presets":[{"id":"mock-paint-v1","technique":"simulation","nativeInpainting":false,"maskAppliedToOutput":true}],"maxInputPixels":4194304,"maxImageBytes":20971520,"minInputSide":1,"maxInputAspectRatio":null,"maxSnapshotBytes":67108864,"snapshotFormat":"comp-zip","progressTransport":"polling","cancelSupported":false,"pairingScope":"single-owner-installation","resultAlphaMode":"straight"}"#.utf8)
         case ("GET", "/v1/backend/status"):
             status = 200; data = Data(#"{"ok":true,"backend":"mock","isSimulation":true}"#.utf8)
+        case ("GET", "/v1/jobs"):
+            status = 200; data = Data(#"{"jobs":[]}"#.utf8)
         case ("POST", "/v1/jobs"):
             status = 503; data = Data(#"{"error":{"code":"fixture_upload_stopped","message":"Synthetic upload captured locally"}}"#.utf8)
         default:

@@ -1,6 +1,31 @@
 import Foundation
 
 extension EditorModel {
+    var clippingIssue: String? {
+        guard let layer = activeLayer, !layer.isGroup else { return "请选择一个普通图层。" }
+        guard selectedLayerIDs.count <= 1 else { return "请先选择一个图层。" }
+        guard !document.isEffectivelyLocked(layer.id) else { return "图层已锁定，请先解锁。" }
+        if layer.maskSourceID != nil { return nil }
+        do { _ = try editor.clippingBase(for: layer.id); return nil }
+        catch { return error.localizedDescription }
+    }
+
+    var clippingSourceName: String? {
+        guard let source = activeLayer?.maskSourceID else { return nil }
+        return document.layers.first { $0.id == source }?.name
+    }
+
+    func setLayerClipping(_ enabled: Bool) {
+        guard let layer = activeLayer else { return }
+        guard selectedLayerIDs.count <= 1 else { errorMessage = "请先选择一个图层。"; return }
+        cancelTransform()
+        report {
+            try editor.setClipping(layerID: layer.id, enabled: enabled)
+            changed()
+            status = enabled ? "已创建剪贴蒙版 · 原像素保留" : "已释放剪贴蒙版 · 可撤销"
+        }
+    }
+
     /// Multi-selection is panel navigation, not a persistent edit or undo step.
     func synchronizeLayerSelection() {
         let ids = Set(document.layers.map(\.id))

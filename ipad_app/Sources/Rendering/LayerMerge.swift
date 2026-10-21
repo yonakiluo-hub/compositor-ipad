@@ -8,7 +8,7 @@ import CoreGraphics
 
 enum LayerMergeError: LocalizedError, Equatable {
     case nothingSelected, missingLayer, singleLayer, noLayerBelow, noRasterContent
-    case differentParents, nonAdjacent, locked, hiddenContent, externalOpacity, backdropBlend, stalePlan
+    case differentParents, nonAdjacent, locked, hiddenContent, externalOpacity, backdropBlend, clippingDependency, stalePlan
 
     var errorDescription: String? {
         switch self {
@@ -23,6 +23,7 @@ enum LayerMergeError: LocalizedError, Equatable {
         case .hiddenContent: "待合并内容含有隐藏图层，请先显示它们；盖印画布副本会保留隐藏的源层。"
         case .externalOpacity: "上级图层组的不透明度未满，直接合并会改变叠色；请选中整个组，或使用盖印画布副本。"
         case .backdropBlend: "待合并图层使用了依赖背景的混合模式；请改为正常模式，或使用盖印画布副本保留外观。"
+        case .clippingDependency: "请将剪贴基底及其全部剪贴图层一起合并，或先解除剪贴关系；也可使用盖印画布副本。"
         case .stalePlan: "合并准备后文稿已有变化，请重新选择并合并。"
         }
     }
@@ -75,17 +76,7 @@ enum LayerMerge {
             if let parent = copy.parentID, !plan.removedIDs.contains(parent) { copy.parentID = nil }
             return copy
         }
-        let context = try RasterImage.context(width: Int(plan.bounds.width), height: Int(plan.bounds.height))
-        context.translateBy(x: -plan.bounds.minX, y: -plan.bounds.minY)
-        for entry in LayerHierarchy.entries(subset) where entry.isVisible && !entry.layer.isGroup {
-            guard let image = try renderer.image(for: entry.layer) else { continue }
-            context.saveGState()
-            context.setAlpha(entry.effectiveOpacity)
-            context.setBlendMode(entry.layer.blendMode.cgMode)
-            try renderer.drawLayer(entry.layer, image: image, context: context)
-            context.restoreGState()
-        }
-        guard let image = context.makeImage() else { throw RasterError.allocation }
+        let image = try renderer.render(layers: subset, bounds: plan.bounds)
         return RasterLayer(name: plan.name, pngData: try RasterImage.png(image),
                            transform: LayerTransform(origin: plan.bounds.origin, size: plan.bounds.size),
                            parentID: plan.parentID)
@@ -142,6 +133,11 @@ enum LayerMerge {
         while let id = pending.popLast() {
             for child in children[id] ?? [] where removed.insert(child.id).inserted { pending.append(child.id) }
         }
+        // Baking only one side of a clipping dependency would either reveal the
+        // clipped source pixels or change still-live children to use a new alpha.
+        guard !document.layers.contains(where: { layer in
+            layer.maskSourceID.map { removed.contains(layer.id) != removed.contains($0) } ?? false
+        }) else { throw LayerMergeError.clippingDependency }
         let sources = document.layers.filter { removed.contains($0.id) }
         guard sources.contains(where: { !$0.isGroup }) else { throw LayerMergeError.noRasterContent }
         guard !sources.contains(where: { source in

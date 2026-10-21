@@ -26,24 +26,49 @@ public actor BridgeClient {
 
     deinit { session.invalidateAndCancel() }
 
-    public func preflight() async throws -> BridgeCapabilities {
+    /// Fetch the catalogue without requiring the default model to be healthy. A missing
+    /// experimental model must not hide the usable models or block old candidate recovery.
+    public func capabilities() async throws -> BridgeCapabilities {
         let capabilities: BridgeCapabilities = try await get("/v1/capabilities")
         guard capabilities.protocolVersion == 1, capabilities.backend == pairing.backend,
               capabilities.isSimulation == (pairing.backend == "mock"),
               capabilities.resultAlphaMode == "straight", capabilities.progressTransport == "polling",
-              !capabilities.presets.isEmpty, capabilities.presets.allSatisfy({ $0.maskAppliedToOutput }),
+              !capabilities.presets.isEmpty,
+              Set(capabilities.presets.map(\.id)).count == capabilities.presets.count,
+              capabilities.presets.allSatisfy({ bridgeValidID($0.id) }),
+              capabilities.defaultPresetID.map({ capabilities.preset(id: $0) != nil }) == true,
               capabilities.maxInputPixels > 0, capabilities.maxImageBytes > 0, capabilities.minInputSide > 0,
-              capabilities.maxInputAspectRatio == nil || capabilities.maxInputAspectRatio! > 0 else {
+              capabilities.maxInputAspectRatio == nil || capabilities.maxInputAspectRatio! >= 1 else {
             throw BridgeError.incompatibleServer("后端、预设或透明度约定不一致")
         }
-        let status: BridgeBackendStatus = try await get("/v1/backend/status")
-        guard status.backend == capabilities.backend, status.isSimulation == capabilities.isSimulation else {
-            throw BridgeError.incompatibleServer("服务状态与能力不一致")
+        return capabilities
+    }
+
+    public func backendStatus(presetID: String, capabilities: BridgeCapabilities) async throws -> BridgeBackendStatus {
+        guard let preset = capabilities.preset(id: presetID), preset.isAvailable else {
+            throw BridgeError.incompatibleServer("所选组合已关闭或配置有误")
         }
-        guard status.ok else {
-            let missing = (status.missingNodes ?? []) + (status.missingModels ?? []) + (status.invalidInputs ?? [])
-            throw BridgeError.incompatibleServer(status.error?.message ?? (missing.isEmpty ? "后端未就绪" : "后端缺项：" + missing.joined(separator: "、")))
+        _ = try capabilities.inputLimits(for: preset)
+        // Original v0.1 servers have no preset query contract; their sole/default
+        // preset still uses the original endpoint. v0.2 advertises defaultPreset.
+        let query = capabilities.defaultPreset == nil && capabilities.presets.count == 1
+            ? [] : [URLQueryItem(name: "presetId", value: presetID)]
+        let status: BridgeBackendStatus = try await get("/v1/backend/status", query: query)
+        guard status.backend == pairing.backend,
+              status.isSimulation == capabilities.isSimulation,
+              status.presetId == nil || status.presetId == presetID else {
+            throw BridgeError.incompatibleServer("服务状态与所选组合不一致")
         }
+        return status
+    }
+
+    public func preflight(presetID: String? = nil) async throws -> BridgeCapabilities {
+        let capabilities = try await capabilities()
+        guard let id = presetID ?? capabilities.defaultPresetID else {
+            throw BridgeError.incompatibleServer("服务没有默认组合")
+        }
+        let status = try await backendStatus(presetID: id, capabilities: capabilities)
+        guard status.ok else { throw BridgeError.incompatibleServer(status.problem ?? "后端未就绪") }
         return capabilities
     }
 
@@ -56,11 +81,17 @@ public actor BridgeClient {
             try validate(existing, submission: submission)
             return existing
         }
-        let capabilities = try await preflight()
-        try submission.metadata.validate(capabilities: capabilities)
-        guard submission.imagePNG.count <= capabilities.maxImageBytes, submission.maskPNG.count <= capabilities.maxImageBytes else {
+        // A durable unacknowledged request may already exist on Windows. Replay it
+        // before consulting today's catalogue/readiness: the accepted preset may now
+        // be disabled, missing or offline. The server resolves idempotency first.
+        // New UI submissions are preflighted before prepare(); server validation is
+        // still authoritative for a genuinely new ID and current queue limits.
+        try submission.metadata.validate()
+        guard submission.imagePNG.count <= 20 * 1024 * 1024, submission.maskPNG.count <= 20 * 1024 * 1024 else {
             throw BridgeError.invalidInput("输入文件超过服务限制")
         }
+        try bridgeValidatePNG(submission.imagePNG, size: submission.metadata.inputSize, mask: false)
+        try bridgeValidatePNG(submission.maskPNG, size: submission.metadata.inputSize, mask: true)
         let multipart = try BridgeMultipart(parts: [
             .init(name: "metadata", filename: nil, mime: "application/json; charset=utf-8", data: submission.metadataJSON),
             .init(name: "image", filename: "image.png", mime: "image/png", data: submission.imagePNG),

@@ -96,3 +96,32 @@ xcodebuild -project "$perf_root/ipad_app/CompositorPad.xcodeproj" \
 测试输出 `COMPOSITOR_PERFORMANCE` JSON 和 `COMPOSITOR_BACKGROUND_SAVE` 行，并把每个工作负载的 JSON 作为 XCTest attachment 保留。用同样的构建类型、尺寸、层数、采样数和内容比较前后变化；测试进程可通过 `COMPOSITOR_PERFORMANCE_WIDTH`、`COMPOSITOR_PERFORMANCE_HEIGHT` 改变合成尺寸，必须同时记录该条件。不要把设备之间或 Debug 与 Release 之间的差异直接归因于代码改动。
 
 结束后只卸载本次创建的 `com.compositor.ipad.performance` 测试宿主；保留本地报告与 `.xcresult`，不卸载生产应用、不删除用户画稿。本次已清理真机和既有模拟器中的独立性能宿主，没有新建或删除模拟器。
+
+## 剪贴合成补充（Mac，2026-10-21）
+
+本轮 `mac/clipping-and-ai-presets` 的裁切优化后，另用独立 `swiftc -O` 程序测量缓存已热的 CPU 图层合成。没有读取用户画稿；每组预热 3 次、计时 10 次。输入是半透明纯色基底和 1/3 个合成剪贴层，均使用最近邻采样，画布固定 1200×900。
+
+| 基底尺寸 | 剪贴层数 | 平均合成 ms | 中位合成 ms |
+| --- | ---: | ---: | ---: |
+| 1200×900 | 1 | 5.016 | 4.983 |
+| 1200×900 | 3 | 5.738 | 5.723 |
+| 300×200 | 1 | 0.362 | 0.359 |
+| 300×200 | 3 | 0.396 | 0.395 |
+
+四组同进程运行的最大 RSS 为 77,479,936 字节（约 73.9 MiB），其中包含数据准备和解码缓存；它与上文真机采样 footprint 的口径不同，不能直接比较。小基底的临时表面只覆盖其变换边界与抗锯齿余量，不扫描整张画布；全画布基底仍需要完整临时表面。未测多堆栈、长笔迹或 4096 边长压力，不能据此承诺大画稿手感。
+
+这组数据只说明本 Mac 上此合成负载的处理时间，不是 iPad、Pencil 到屏延迟或帧率。测量程序保存在 [benchmark_clipping.swift](../ipad_app/tools/benchmark_clipping.swift)，可在 Mac 从仓库根目录运行：
+
+```sh
+python3 - <<'PYTHON'
+from pathlib import Path
+import subprocess
+import tempfile
+with tempfile.TemporaryDirectory() as directory:
+    binary = str(Path(directory) / "clipping-benchmark")
+    sources = sorted(str(path) for area in ("Core", "Rendering", "Bridge")
+                     for path in (Path("ipad_app/Sources") / area).glob("*.swift"))
+    subprocess.run(["swiftc", "-O", *sources, "ipad_app/tools/benchmark_clipping.swift", "-o", binary], check=True)
+    subprocess.run(["/usr/bin/time", "-l", binary], check=True)
+PYTHON
+```
