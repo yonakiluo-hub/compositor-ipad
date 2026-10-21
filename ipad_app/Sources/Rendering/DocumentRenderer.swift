@@ -3,6 +3,11 @@ import CoreGraphics
 import CoreImage
 
 final class DocumentRenderer {
+    private enum MaskReplacement {
+        case original
+        case replacement(CGImage?)
+    }
+
     private var images: [UUID: (Data, CGImage)] = [:]
     private var masks: [UUID: (Data, CGImage)] = [:]
     private let ciContext = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
@@ -36,22 +41,110 @@ final class DocumentRenderer {
         return context.makeImage()
     }
     func render(_ document: CanvasDocument, replacing layerID: UUID? = nil, with replacement: CGImage? = nil) throws -> CGImage {
-        let context = try RasterImage.context(width: document.width, height: document.height)
-        for entry in document.renderLayers {
-            let layer = entry.layer
-            guard let image = layer.id == layerID ? replacement : try self.image(for: layer) else { continue }
-            context.saveGState()
-            context.setAlpha(entry.effectiveOpacity)
-            context.setBlendMode(layer.blendMode.cgMode)
-            try drawLayer(layer, image: image, context: context)
-            context.restoreGState()
-        }
+        try render(document, replacing: layerID, with: replacement, maskReplacement: .original)
+    }
+
+    /// An explicit mask replacement belongs to the temporary image's geometry.
+    /// Passing nil here removes the mask for this preview; omitting this argument
+    /// uses the original mask through the overload above. The temporary mask
+    /// never enters the original layer's decoded mask cache.
+    func render(_ document: CanvasDocument, replacing layerID: UUID, with replacement: CGImage,
+                replacementMask: CGImage?) throws -> CGImage {
+        try render(document, replacing: layerID, with: replacement, maskReplacement: .replacement(replacementMask))
+    }
+
+    private func render(_ document: CanvasDocument, replacing layerID: UUID?, with replacement: CGImage?,
+                        maskReplacement: MaskReplacement) throws -> CGImage {
+        let image = try composite(document.layers, bounds: CGRect(origin: .zero, size: document.size),
+                                  replacing: layerID, with: replacement, maskReplacement: maskReplacement)
         let ids = Set(document.layers.map(\.id))
         images = images.filter { ids.contains($0.key) }; masks = masks.filter { ids.contains($0.key) }
+        return image
+    }
+
+    /// Shared by the canvas, exports and full-bounds layer merges. A merge must
+    /// use the same clipping-stack compositor instead of drawing each leaf alone.
+    func render(layers: [RasterLayer], bounds: CGRect) throws -> CGImage {
+        try composite(layers, bounds: bounds, replacing: nil, with: nil, maskReplacement: .original)
+    }
+
+    private func composite(_ layers: [RasterLayer], bounds: CGRect, replacing layerID: UUID?,
+                           with replacement: CGImage?, maskReplacement: MaskReplacement) throws -> CGImage {
+        let width = Int(bounds.width), height = Int(bounds.height)
+        let context = try RasterImage.context(width: width, height: height)
+        context.translateBy(x: -bounds.minX, y: -bounds.minY)
+        let entries = LayerHierarchy.entries(layers)
+        let clipped = Dictionary(grouping: entries.filter { $0.layer.maskSourceID != nil }, by: { $0.layer.maskSourceID! })
+        func drawOwn(_ entry: LayerHierarchyEntry, in target: CGContext, mode: LayerBlendMode? = nil) throws {
+            let layer = entry.layer
+            guard let image = layer.id == layerID ? replacement : try self.image(for: layer) else { return }
+            target.saveGState()
+            defer { target.restoreGState() }
+            target.setAlpha(entry.effectiveOpacity)
+            target.setBlendMode((mode ?? layer.blendMode).cgMode)
+            try drawLayer(layer, image: image, context: target,
+                          maskReplacement: layer.id == layerID ? maskReplacement : .original)
+        }
+        for entry in entries where entry.isVisible && !entry.layer.isGroup && entry.layer.maskSourceID == nil {
+            let children = (clipped[entry.layer.id] ?? []).filter(\.isVisible)
+            guard !children.isEmpty else { try drawOwn(entry, in: context); continue }
+            // Ported from Compositor LiveMaskRenderer and BrushPixels.c at
+            // 7c2a5a4, MIT © 2026 Wonder Assembly LLC. Stack colors are composed
+            // on an opaque base, then its original coverage is restored ONCE.
+            // Source-over of individually clipped children would thicken soft
+            // edges and apply base opacity/mask repeatedly.
+            // Only the base can supply final coverage. Keep the surface on the
+            // document's integer pixel grid and include an antialiasing margin;
+            // small cropped layers do not allocate or scan the entire canvas.
+            let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0),
+                           CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 1)].map(entry.layer.transform.point)
+            let x = corners.map(\.x).min()!, y = corners.map(\.y).min()!
+            let quad = CGRect(x: x, y: y, width: corners.map(\.x).max()! - x,
+                              height: corners.map(\.y).max()! - y)
+            let region = quad.insetBy(dx: -2, dy: -2).integral.intersection(bounds)
+            guard !region.isNull, !region.isEmpty else { continue }
+            let stackWidth = Int(region.width), stackHeight = Int(region.height)
+            let stack = try RasterImage.context(width: stackWidth, height: stackHeight)
+            stack.translateBy(x: -region.minX, y: -region.minY)
+            try drawOwn(entry, in: stack, mode: .normal)
+            guard let data = stack.data else { throw RasterError.allocation }
+            let pixels = data.assumingMemoryBound(to: UInt8.self)
+            var coverage = [UInt8](repeating: 0, count: stackWidth * stackHeight)
+            for y in 0..<stackHeight {
+                for x in 0..<stackWidth {
+                    let offset = y * stack.bytesPerRow + x * 4, alpha = Int(pixels[offset + 3])
+                    coverage[y * stackWidth + x] = UInt8(alpha)
+                    for channel in 0..<3 {
+                        pixels[offset + channel] = alpha == 0 ? 0 : UInt8(min(255, (Int(pixels[offset + channel]) * 255 + alpha / 2) / alpha))
+                    }
+                    pixels[offset + 3] = 255
+                }
+            }
+            for child in children { try drawOwn(child, in: stack) }
+            for y in 0..<stackHeight {
+                for x in 0..<stackWidth {
+                    let offset = y * stack.bytesPerRow + x * 4, alpha = Int(coverage[y * stackWidth + x])
+                    for channel in 0..<3 { pixels[offset + channel] = UInt8((Int(pixels[offset + channel]) * alpha + 127) / 255) }
+                    pixels[offset + 3] = UInt8(alpha)
+                }
+            }
+            guard let image = stack.makeImage() else { throw RasterError.allocation }
+            context.saveGState()
+            context.setBlendMode(entry.layer.blendMode.cgMode)
+            RasterImage.draw(image, in: region, context: context)
+            context.restoreGState()
+        }
+        // A hidden base hides its clipping stack; a hidden child never breaks
+        // the remaining siblings' stack. Arbitrary live-mask graphs are rejected.
         guard let image = context.makeImage() else { throw RasterError.allocation }
         return image
     }
     func drawLayer(_ layer: RasterLayer, image: CGImage, context: CGContext) throws {
+        try drawLayer(layer, image: image, context: context, maskReplacement: .original)
+    }
+
+    private func drawLayer(_ layer: RasterLayer, image: CGImage, context: CGContext,
+                           maskReplacement: MaskReplacement) throws {
         let transform = layer.transform
         context.translateBy(x: transform.center.x, y: transform.center.y)
         context.rotate(by: transform.radians)
@@ -59,11 +152,22 @@ final class DocumentRenderer {
         let rect = CGRect(x: -transform.size.width / 2, y: -transform.size.height / 2,
                           width: transform.size.width, height: transform.size.height)
         context.interpolationQuality = transform.sampling.quality
-        if layer.maskEnabled, let data = layer.maskPNGData {
-            let mask: CGImage
-            if let hit = masks[layer.id], hit.0 == data { mask = hit.1 }
-            else { mask = try RasterImage.decode(data); masks[layer.id] = (data, mask) }
-            RasterImage.clip(mask, to: rect, context: context)
+        if layer.maskEnabled {
+            let mask: CGImage?
+            switch maskReplacement {
+            case .replacement(let replacement):
+                mask = replacement
+            case .original:
+                if let data = layer.maskPNGData {
+                    if let hit = masks[layer.id], hit.0 == data { mask = hit.1 }
+                    else {
+                        let decoded = try RasterImage.decode(data)
+                        masks[layer.id] = (data, decoded)
+                        mask = decoded
+                    }
+                } else { mask = nil }
+            }
+            if let mask { RasterImage.clip(mask, to: rect, context: context) }
         }
         RasterImage.draw(image, in: rect, context: context)
     }

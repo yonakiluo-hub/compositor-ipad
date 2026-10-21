@@ -7,29 +7,76 @@ extension EditorModel {
             let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
             let value = try BridgePairing.decode(Data(contentsOf: url))
             try KeychainPairingStore().save(value)
-            pairing = value; bridge = try BridgeClient(pairing: value); capabilities = nil
+            pairing = value; bridge = try BridgeClient(pairing: value); resetPresetContext()
             jobs.removeAll(); resetCandidateContext(); pendingRequests.removeAll(); backupStatus = ""; restartRecovery()
         }
     }
     func disconnect() {
         recoveryTask?.cancel()
-        report { try KeychainPairingStore().remove(); pairing = nil; bridge = nil; capabilities = nil; jobs = []; resetCandidateContext(); pendingRequests = []; backupStatus = "" }
+        report { try KeychainPairingStore().remove(); pairing = nil; bridge = nil; resetPresetContext(); jobs = []; resetCandidateContext(); pendingRequests = []; backupStatus = "" }
     }
     private func matchesContext(_ client: BridgeClient, pairing expectedPairing: BridgePairing, documentID: UUID? = nil) -> Bool {
         !Task.isCancelled && bridge === client && pairing == expectedPairing && (documentID == nil || document.id == documentID)
     }
 
+    var selectedPreset: BridgePreset? {
+        selectedPresetID.flatMap { capabilities?.preset(id: $0) }
+    }
+    var canGenerateWithSelectedPreset: Bool {
+        selectedPreset?.isAvailable == true && presetStatus?.ok == true && !isCheckingPresets
+    }
+    func resetPresetContext() {
+        capabilities = nil; selectedPresetID = nil; presetStatus = nil
+        presetCheckMessage = ""; isCheckingPresets = false; presetCheckOperation = UUID()
+    }
+    func choosePreset(_ id: String) {
+        guard !networkBusy, let preset = capabilities?.preset(id: id), preset.isAvailable else { return }
+        selectedPresetID = id; presetStatus = nil; presetCheckMessage = "正在检查所选组合…"
+        // Invalidate even A → B → A responses before scheduling another request.
+        presetCheckOperation = UUID(); isCheckingPresets = true
+        Task { await checkSelectedPreset() }
+    }
     func connect() async {
         guard let bridge, let pairing else { return }
+        let operation = UUID(); presetCheckOperation = operation
+        isCheckingPresets = true; presetStatus = nil; presetCheckMessage = "正在读取 Windows 生成组合…"
+        defer { if presetCheckOperation == operation { isCheckingPresets = false } }
         do {
-            let checked = try await bridge.preflight()
-            guard matchesContext(bridge, pairing: pairing) else { return }
+            let checked = try await bridge.capabilities()
+            guard matchesContext(bridge, pairing: pairing), presetCheckOperation == operation else { return }
             capabilities = checked
+            if selectedPresetID == nil { selectedPresetID = checked.defaultPresetID }
+            // A disappeared choice is not silently replaced by a different model.
+            await checkSelectedPreset()
+            guard matchesContext(bridge, pairing: pairing) else { return }
             await refreshJobs()
-        } catch { if matchesContext(bridge, pairing: pairing) { errorMessage = error.localizedDescription } }
+        } catch {
+            guard matchesContext(bridge, pairing: pairing), presetCheckOperation == operation else { return }
+            presetCheckMessage = error.localizedDescription
+        }
+    }
+    func checkSelectedPreset() async {
+        guard let bridge, let pairing, let capabilities, let id = selectedPresetID else { return }
+        let operation = UUID(); presetCheckOperation = operation
+        presetStatus = nil; isCheckingPresets = true; presetCheckMessage = "正在检查所选组合…"
+        defer { if presetCheckOperation == operation { isCheckingPresets = false } }
+        guard let preset = capabilities.preset(id: id) else {
+            presetCheckMessage = "此前选择的组合已从 Windows 移除，请选择其他组合"; return
+        }
+        if let reason = preset.unavailableReason { presetCheckMessage = reason; return }
+        do {
+            let status = try await bridge.backendStatus(presetID: id, capabilities: capabilities)
+            guard matchesContext(bridge, pairing: pairing), selectedPresetID == id, presetCheckOperation == operation else { return }
+            presetStatus = status
+            presetCheckMessage = status.problem ?? (capabilities.isSimulation ? "模拟服务已就绪，不执行 AI" : "当前依赖检查通过，可以提交；生成效果需审阅")
+        } catch {
+            guard matchesContext(bridge, pairing: pairing), selectedPresetID == id, presetCheckOperation == operation else { return }
+            presetCheckMessage = error.localizedDescription
+        }
     }
     func submitGeneration() async {
-        guard !networkBusy, let bridge, let pairing, let taskStore else { return }
+        guard !networkBusy, let bridge, let pairing, let taskStore,
+              canGenerateWithSelectedPreset, let frozenPresetID = selectedPresetID else { return }
         // A result anchored to this revision must still have a source document after a crash.
         saveNow(); guard !saveFailed else { return }
         networkBusy = true; defer { networkBusy = false }
@@ -38,18 +85,25 @@ extension EditorModel {
         do {
             let image = try renderer.render(snapshot)
             let mask = try snapshot.selectionMaskPNGData.map(RasterImage.decode) ?? RasterImage.solidMask(width: snapshot.width, height: snapshot.height, white: true)
-            let caps = try await bridge.preflight()
+            let caps = try await bridge.preflight(presetID: frozenPresetID)
             guard matchesContext(bridge, pairing: pairing, documentID: snapshot.id) else { return }
-            capabilities = caps
-            let crop = try generationCrop(mask: mask, selected: snapshot.selectionMaskPNGData != nil, capabilities: caps)
+            guard let preset = caps.preset(id: frozenPresetID), preset.isAvailable else {
+                throw BridgeError.invalidInput("所选组合已关闭或移除，请重新检查连接")
+            }
+            if selectedPresetID == frozenPresetID { capabilities = caps }
+            let limits = try caps.inputLimits(for: preset)
+            let crop = try generationCrop(mask: mask, selected: snapshot.selectionMaskPNGData != nil, limits: limits)
             guard let croppedImage = image.cropping(to: crop.cgRect), let croppedMask = mask.cropping(to: crop.cgRect) else { throw RasterError.invalidImage }
             let imageData = try RasterImage.png(croppedImage), maskData = try RasterImage.png(croppedMask)
             let metadata = BridgeJobMetadata(documentId: snapshot.id.uuidString.lowercased(), baseRevision: snapshot.revision,
                 sourceLayerIds: snapshot.renderLayers.map { $0.layer.id.uuidString.lowercased() },
                 canvasSize: .init(width: snapshot.width, height: snapshot.height),
                 cropRect: .init(x: crop.x, y: crop.y, width: crop.width, height: crop.height),
-                workflowPreset: caps.presets[0].id, prompt: frozenPrompt, seed: Int64.random(in: 0...Int64.max))
+                workflowPreset: frozenPresetID, prompt: frozenPrompt, seed: Int64.random(in: 0...Int64.max))
             try metadata.validate(capabilities: caps)
+            guard imageData.count <= caps.maxImageBytes, maskData.count <= caps.maxImageBytes else {
+                throw BridgeError.invalidInput("生成区域文件超过服务大小限制，请缩小选区")
+            }
             let submission = try await taskStore.prepare(metadata: metadata, imagePNG: imageData, maskPNG: maskData, pairing: pairing)
             guard matchesContext(bridge, pairing: pairing, documentID: snapshot.id) else { return }
             pendingRequests.append(metadata.clientRequestId)
@@ -98,7 +152,7 @@ extension EditorModel {
             errorMessage = error.localizedDescription
         }
     }
-    private func generationCrop(mask: CGImage, selected: Bool, capabilities: BridgeCapabilities) throws -> PixelRect {
+    func generationCrop(mask: CGImage, selected: Bool, limits: BridgeInputLimits) throws -> PixelRect {
         var rect = CGRect(x: 0, y: 0, width: mask.width, height: mask.height)
         if selected {
             let context = try RasterImage.context(width: mask.width, height: mask.height, gray: true)
@@ -109,14 +163,28 @@ extension EditorModel {
                 minX = min(minX, x); minY = min(minY, y); maxX = max(maxX, x); maxY = max(maxY, y)
             } }
             guard maxX >= minX else { throw BridgeError.invalidInput("选区为空，请绘制选区或取消选区") }
-            let margin = max(32, capabilities.minInputSide)
+            let margin = max(32, limits.minimumSide)
             rect = CGRect(x: max(0, minX - margin), y: max(0, minY - margin),
                           width: min(mask.width, maxX + margin + 1) - max(0, minX - margin),
                           height: min(mask.height, maxY + margin + 1) - max(0, minY - margin))
         }
-        guard Int(rect.width * rect.height) <= capabilities.maxInputPixels else {
-            throw BridgeError.invalidInput("生成区域超过服务像素限制，请绘制较小选区；本地画布不会被缩小")
+        // Add context, never rescale source pixels. Thin/edge selections need enough
+        // room for both the chosen model's short side and its aspect-ratio boundary.
+        if selected {
+            var width = max(Int(rect.width), limits.minimumSide)
+            var height = max(Int(rect.height), limits.minimumSide)
+            if let ratio = limits.maximumAspectRatio {
+                if Double(width) / Double(height) > ratio { height = Int(ceil(Double(width) / ratio)) }
+                if Double(height) / Double(width) > ratio { width = Int(ceil(Double(height) / ratio)) }
+            }
+            guard width <= mask.width, height <= mask.height else {
+                throw BridgeError.invalidInput("画布边界内没有足够上下文满足此组合的尺寸限制，请换用其他组合或扩大画布")
+            }
+            let x = max(0, min(mask.width - width, Int(rect.midX) - width / 2))
+            let y = max(0, min(mask.height - height, Int(rect.midY) - height / 2))
+            rect = CGRect(x: x, y: y, width: width, height: height)
         }
+        try limits.validate(width: Int(rect.width), height: Int(rect.height))
         return PixelRect(x: Int(rect.minX), y: Int(rect.minY), width: Int(rect.width), height: Int(rect.height))
     }
     func restartRecovery() {
@@ -131,7 +199,7 @@ extension EditorModel {
             }
         }
     }
-    func suspend() { saveNow(); recoveryTask?.cancel() }
+    func suspend() { cancelTransform(); saveNow(); recoveryTask?.cancel() }
     func refreshJobs(retryDeletions: Bool = true) async {
         // A replacement recovery task may start before its cancelled predecessor unwinds.
         // Wait asynchronously for that owner instead of silently dropping the new refresh.

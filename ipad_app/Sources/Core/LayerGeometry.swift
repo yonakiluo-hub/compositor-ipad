@@ -87,12 +87,16 @@ public enum LayerHierarchy {
     /// Groups use Compositor's pass-through semantics: opacity multiplies each descendant.
     public static func entries(_ layers: [RasterLayer], topFirst: Bool = false) -> [LayerHierarchyEntry] {
         let children = Dictionary(grouping: layers, by: \.parentID)
+        let byID = Dictionary(layers.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var result: [LayerHierarchyEntry] = []
         func visit(_ parent: UUID?, depth: Int, visible: Bool, opacity: Double) {
             guard depth <= 64 else { return }
             let siblings = children[parent] ?? []
             for layer in topFirst ? Array(siblings.reversed()) : siblings {
-                let effective = visible && layer.isVisible
+                // A contiguous clipping stack follows the base's visibility.
+                // This also keeps AI source-layer metadata aligned with the render.
+                let baseVisible = layer.maskSourceID.flatMap { byID[$0]?.isVisible } ?? true
+                let effective = visible && layer.isVisible && baseVisible
                 let effectiveOpacity = opacity * layer.opacity
                 result.append(LayerHierarchyEntry(layer: layer, depth: depth, isVisible: effective,
                                                   effectiveOpacity: effectiveOpacity))
@@ -107,8 +111,26 @@ public enum LayerHierarchy {
         var byID: [UUID: RasterLayer] = [:]
         for layer in layers {
             guard byID.updateValue(layer, forKey: layer.id) == nil,
-                  !layer.isGroup || (layer.pngData == nil && layer.maskPNGData == nil && layer.blendMode == .normal)
+                  !layer.isGroup || (layer.pngData == nil && layer.maskPNGData == nil && layer.maskSourceID == nil && layer.blendMode == .normal)
             else { throw DocumentError.invalid("重复图层 ID 或不支持的图层组内容") }
+        }
+        // Compositor also supports arbitrary live-mask graphs. This iPad stage only
+        // accepts Photoshop-style contiguous raster stacks; never reinterpret a
+        // foreign cross-group, chained or detached dependency as an ordinary layer.
+        for siblings in Dictionary(grouping: layers, by: \.parentID).values {
+            var base: UUID?
+            for layer in siblings {
+                if let source = layer.maskSourceID {
+                    guard source != layer.id, byID[source] != nil else {
+                        throw DocumentError.invalid("剪贴蒙版引用无效")
+                    }
+                    guard !layer.isGroup, source == base, let original = byID[source],
+                          !original.isGroup, original.maskSourceID == nil,
+                          original.parentID == layer.parentID else {
+                        throw DocumentError.unsupported("剪贴图层必须连续排列在同组的基底层上方；请先解除剪贴关系，或将整组一起操作")
+                    }
+                } else { base = layer.isGroup ? nil : layer.id }
+            }
         }
         for layer in layers {
             var seen: Set<UUID> = [layer.id]

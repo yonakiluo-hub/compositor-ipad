@@ -38,6 +38,7 @@ public enum DocumentStore {
         var blendMode: LayerBlendMode?
         var maskFile: String?
         var maskEnabled: Bool?
+        var maskSourceID: UUID?
     }
 
     private struct IPadState: Codable {
@@ -70,7 +71,8 @@ public enum DocumentStore {
             return LayerRecord(id: layer.id, name: layer.name, isVisible: layer.isVisible,
                                transform: layer.transform, imageFile: imageFile, parentID: layer.parentID,
                                isGroup: layer.isGroup ? true : nil, opacity: layer.opacity, blendMode: layer.blendMode,
-                               maskFile: maskFile, maskEnabled: maskFile == nil ? nil : layer.maskEnabled)
+                               maskFile: maskFile, maskEnabled: maskFile == nil ? nil : layer.maskEnabled,
+                               maskSourceID: layer.maskSourceID)
         }
         let manifest = Manifest(resolution: document.resolution, documentID: document.id, width: document.width,
                                 height: document.height, activeLayerID: document.activeLayerID, layers: records)
@@ -181,6 +183,7 @@ public enum DocumentStore {
             guard manifest.version >= 2 || (record.parentID == nil && record.isGroup != true),
                   manifest.version >= 3 || ((record.opacity ?? 1) == 1 && (record.blendMode ?? .normal) == .normal),
                   manifest.version >= 4 || (record.maskFile == nil && record.maskEnabled == nil),
+                  manifest.version >= 5 || record.maskSourceID == nil,
                   manifest.version >= 8 || record.isGroup != true || (record.opacity ?? 1) == 1,
                   record.maskEnabled == nil || record.maskFile != nil else { throw DocumentError.invalid("图层字段与工程版本不一致") }
             return RasterLayer(id: record.id, name: record.name,
@@ -188,7 +191,8 @@ public enum DocumentStore {
                                isVisible: record.isVisible, isLocked: state?.lockedLayerIDs.contains(record.id) ?? false,
                                opacity: record.opacity ?? 1, blendMode: record.blendMode ?? .normal,
                                parentID: record.parentID, isGroup: record.isGroup ?? false,
-                               maskPNGData: try asset(record.maskFile, layerID: record.id, mask: true), maskEnabled: record.maskEnabled ?? true)
+                               maskPNGData: try asset(record.maskFile, layerID: record.id, mask: true), maskEnabled: record.maskEnabled ?? true,
+                               maskSourceID: record.maskSourceID)
         }
         var selection: Data?
         if let selectionFile = state?.selectionFile {
@@ -223,7 +227,7 @@ public enum DocumentStore {
         let transformKeys: Set<String> = ["origin", "size", "rotation", "flipX", "flipY", "sampling"]
         for layer in layers {
             guard Set(layer.keys).isSubset(of: layerKeys) else { throw DocumentError.unsupported("未知图层字段") }
-            for field in ["maskSourceID", "adjustment", "maskPlacement", "shape", "effects", "text"] {
+            for field in ["adjustment", "maskPlacement", "shape", "effects", "text"] {
                 if let value = layer[field], !(value is NSNull) { throw DocumentError.unsupported(field) }
             }
             if let linked = layer["maskLinked"], !(linked is NSNull) {
