@@ -222,10 +222,26 @@ public final class DocumentEditor {
     }
 
     public func moveLayer(_ id: UUID, into parentID: UUID?) throws {
-        guard let index = document.layers.firstIndex(where: { $0.id == id }) else { throw DocumentError.missingLayer }
-        guard !document.isEffectivelyLocked(id), parentID.map({ !document.isEffectivelyLocked($0) }) ?? true
-        else { throw DocumentError.lockedLayer }
-        try transaction("移动图层") { $0.layers[index].parentID = parentID }
+        try moveLayers([id], into: parentID)
+    }
+
+    public func moveLayers(_ ids: Set<UUID>, into parentID: UUID?, position: LayerInsertionPosition = .top) throws {
+        try organizeLayers(LayerOrganization.movePlan(document: document, selectedIDs: ids, into: parentID, position: position))
+    }
+
+    @discardableResult
+    public func groupLayers(_ ids: Set<UUID>, name: String = "图层组") throws -> UUID {
+        let plan = try LayerOrganization.groupPlan(document: document, selectedIDs: ids, name: name)
+        try organizeLayers(plan)
+        return plan.groupID!
+    }
+
+    public func moveLayersOutOfGroup(_ ids: Set<UUID>) throws {
+        try organizeLayers(LayerOrganization.moveOutPlan(document: document, selectedIDs: ids))
+    }
+
+    func organizeLayers(_ plan: LayerOrganizationPlan) throws {
+        try transaction(plan.actionName) { try LayerOrganization.apply(plan, to: &$0) }
     }
 
     /// A changed revision requires an explicit user choice to insert at the original

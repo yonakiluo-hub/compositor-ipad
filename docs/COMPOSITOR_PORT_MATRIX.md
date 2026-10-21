@@ -8,13 +8,13 @@
 
 **继续参考并移植 Compositor 是合理的。** 当前 iPad 已有独立文档、事务、渲染和网络边界，应优先抽取上游参数、像素算法、图层关系规则及测试样例，接入这些边界。上游的 `EditorSession`、AppKit 面板、鼠标事件、桌面窗口和 GPU 视图不能整体搬进 UIKit；Pencil、触控手柄、后台保存及设备内存预算必须继续单独适配。无需推倒已经验收的 iPad 文稿、选区和 AI 链路，也不能只依照 README 重做一套简化算法。
 
-本表包含 `c107ece` 的已验收自由变换，以及本轮 `mac/layer-compositing` 的蒙版/合并实现；后者的自动化与真机验证分别见 [IPAD_STATUS.md](IPAD_STATUS.md)。**实现、测试通过和真机验收仍分别记录，后续计划不属于已完成能力**：
+本表包含已验收的自由变换、蒙版/合并、剪贴和本轮 `mac/layer-group-organization` 的组内整理；自动化与真机验证分别见 [IPAD_STATUS.md](IPAD_STATUS.md)，最新顺序见 [接手入口](IPAD_NEXT_AGENT_HANDOFF.md)。**实现、测试通过和真机验收仍分别记录，合并后的跨端验收及后续计划不属于已完成能力**：
 
 | 工作 | 官方主线依据 | iPad 当前缺口与移植重点 |
 | --- | --- | --- |
 | 图层蒙版 | [`LayerMask.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerMask.swift) 有灰度覆盖、独立 `placement`、链接状态和蒙版画笔入口；README 列出绘制、填充、反相、模糊及羽化。 | 已接入图像/蒙版编辑目标、全白新建、直接绘制、填充、反相、载入选区、启停及删除；黑色隐藏、白色恢复，原像素保持不变，软选区限制覆盖。尚缺蒙版专用模糊/羽化、独立位置/未链接蒙版和组蒙版，不能将可绘制的链接蒙版称为完整蒙版工具集。 |
-| 多层选择、合并与整理 | [`LayerGroups.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerGroups.swift) 管理选择集合、后代、分组及移出；[`LayerMerge.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerMerge.swift) 区分向下合并、多选合并和组合并。 | 已接入多选导航、向下/多选/组合并和默认隐藏的画布盖印。合并限同父组连续项目、可见未锁定内容、正常混合及全不透明的外部父组；保留组后代和同级插入次序、完整画布外范围，一步撤销恢复原层。盖印仅包含画布内可见内容且保留源层。跨组/不连续/混合依赖暂不合并，已有层重新分组界面和多层共同变换仍待开发。 |
-| 剪贴与组表现 | [`LiveLayerMask.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LiveLayerMask.swift) 有剪贴关系、循环校验、删除/合并后的处理；`LayerGroups.swift` 和 `LayerAppearance.swift` 定义层级与透明度规则。 | 同组连续普通栅格层的剪贴关系已接入：原像素保留、基底 alpha 仅合成一次，复制组重映射关系，拆散依赖的删除/重排/移动原子拒绝，完整堆栈可合并，标准 maskSourceID 保存。隐藏基底隐藏整个堆栈，与上游任意实时蒙版隐藏源语义不同；跨组/链式/分离关系仍拒绝。组蒙版、完整混合模式及已有层重新分组仍待开发。 |
+| 多层选择、合并与整理 | [`LayerGroups.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerGroups.swift) 管理选择集合、后代、分组及移出；[`LayerMerge.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerMerge.swift) 区分向下合并、多选合并和组合并。 | 已接入多选导航、向下/多选/组合并、默认隐藏的画布盖印，以及已有层/子树整批移入移出组、同组连续项目成组和明确同级插入位置。整理保留原 PNG、UUID、蒙版、变换及完整剪贴关系，隐藏项可移动，锁定子树或祖先拒绝；一次事务预检并提交，拆散依赖整次拒绝。跨父组继承新祖先外观，不承诺画面恒定，详见[组整理范围](IPAD_GROUP_ORGANIZATION.md)。合并仍限连续、可见未锁定、正常混合及全不透明外部父组；跨组/不连续/混合依赖不合并。多层共同变换、跨组/不连续成组和解散组仍待开发。 |
+| 剪贴与组表现 | [`LiveLayerMask.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LiveLayerMask.swift) 有剪贴关系、循环校验、删除/合并后的处理；`LayerGroups.swift` 和 `LayerAppearance.swift` 定义层级与透明度规则。 | 同组连续普通栅格层的剪贴关系已接入：原像素保留、基底 alpha 仅合成一次，复制组重映射关系，拆散依赖的删除/重排/移动原子拒绝；完整堆栈可合并、移动和成组，标准 maskSourceID 保存。隐藏基底隐藏整个堆栈，与上游任意实时蒙版隐藏源语义不同；跨组/链式/分离关系仍拒绝。组蒙版和完整混合模式仍待开发。 |
 | 曲线、色阶与可编辑调整层 | [`Curves.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/Curves.swift) 有 RGB/单通道控制点、保形 Hermite 插值与查找表；[`LayerAdjustment.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerAdjustment.swift) 保存曲线、色阶等参数。 | 当前只有应用后改变像素的亮度、对比度、饱和度和模糊。下一阶段抽取曲线/色阶参数与运算，补触控控制点、实时预览及可重开编辑的调整层；同时定义对下方内容、组、剪贴、蒙版和软选区的作用范围。 |
 | 绘画与修图 | README 列出平滑笔刷、渐变、仿制、修复和局部模糊；相关入口为 `BrushStroke.swift`、`Gradient.swift`、`CloneStamp.swift`、`ContentFill.swift`、`BlurTool.swift`。 | 基础 Pencil、橡皮、填充和吸色已具备；尚缺完整笔刷预设/预测输入、渐变、仿制、修复及局部模糊。应按笔迹事务、采样范围和软选区一致性逐项接入，性能与手感持续测量。 |
 | 后续几何与选区 | README 列出多层/组变换、扭曲、吸附、魔棒/对象/主体选择、扩选/缩选和移动选区轮廓。 | 单栅格层及选中像素自由变换、套索/多边形/矩形/椭圆和羽化已完成；上述多层变换、吸附/透视、魔棒、自动选取、扩缩和独立移动选区轮廓仍缺。不得把支持移动选中像素等同于已支持所有选区操作。 |
@@ -26,10 +26,16 @@ README 用于发现功能，具体支持范围仍以源码和运行结果为准�
 
 ### 接下来按完整操作流程交付
 
-1. **先收好本轮图层合成并补齐余项**：可绘制蒙版、多选、合并/盖印已通过用户真机确认，本轮补齐同组剪贴蒙版；随后推进已有层重新分组与更完整的组表现。验收必须包括原像素保留、隐藏/锁定层、半透明软边、组内层序、一步撤销/重做、保存重开，以及离线操作。
-2. **随后完成常用调色**：曲线、色阶及可编辑调整层。验收包括 RGB/单通道、透明像素、选区与蒙版约束、图层顺序影响、预览/提交一致、取消不改文稿和重开后参数仍可编辑。
-3. **再扩展绘画和修图工具**：笔刷手感、渐变、仿制/修复、更多选区和多层变换，然后文字/形状、图层效果及常用滤镜。按真实作品遇到的阻碍调整同阶段顺序。
-4. **逐步扩大交换与规模**：PSD/PSB 能力报告、上游 `.comp` 更多记录、工作区及大画布性能；持续验证备份恢复、低内存和后台保存。AI 继续使用现有 Windows 桥接，普通编辑保持离线可用。
+以下顺序按 2026-10-21 用户最新要求更新，覆盖旧阶段建议：
+
+1. **图层合成与共同编辑**：剪贴已真机验收，本轮组内整理已实现、真机待确认；接着推进组蒙版和多层共同变换。验收包括原像素与剪贴关系保留、隐藏/锁定项、半透明软边、同级次序、一步撤销/重做、保存重开与离线操作。
+2. **常用调色**：曲线、色阶及可再次编辑的调整层。验收包括 RGB/单通道、透明像素、选区与蒙版约束、图层顺序影响、预览/提交一致、取消不改文稿和重开后参数仍可编辑。
+3. **绘画和修图工具**：笔刷预设与手感、渐变、仿制、修复；围绕真实作品验证采样范围、软选区、事务与持续输入性能。
+4. **更多选区与几何工具**：魔棒和自动选取、选区扩缩、透视与扭曲；明确覆盖与插值规则，保留完整边界并可撤销。
+5. **文字、形状及效果**：可编辑文字和形状、描边、阴影等；保存重开保留参数，缺字体和未知效果明确处理。
+6. **文件交换与文稿辅助**：PSD 支持、更多格式、裁切与辅助线；建立可编辑/仅外观/拒绝的支持矩阵，不承诺未经验证的无损往返。
+
+性能、备份恢复、低内存和后台保存贯穿各阶段。AI 继续使用现有 Windows 桥接，普通编辑保持离线可用；用途快捷入口和新工作流与 Windows 按独立计划协作。
 
 每项提交都应同时交付可用入口、统一事务、工程往返和有代表性的回归测试；核心像素测试可复用上游样例，Pencil/触控/内存仍以 iPad 实测为准。以上为优先级和验收门槛，不是本次一次性完成所有项目的承诺。
 
