@@ -8,10 +8,16 @@ final class EditorModel: ObservableObject {
     @Published var tool: PadTool = .brush {
         didSet {
             if tool != .transform, transformSession != nil { transformSession = nil }
+            if tool == .eraser, layerEditTarget == .mask { maskPaintReveals = false }
         }
     }
     @Published var transformSession: LayerTransformSession?
     @Published var transformAspectLocked = true
+    @Published var layerEditTarget: LayerEditTarget = .pixels
+    @Published var maskPaintReveals = false
+    @Published var selectedLayerIDs: Set<UUID> = []
+    @Published var isLayerMultiSelecting = false
+    var layerSelectionDocumentID: UUID?
     @Published var color: Color = Color(red: 0.18, green: 0.22, blue: 0.28)
     @Published var diameter: Double = 28
     @Published var hardness: Double = 0.8
@@ -106,6 +112,10 @@ final class EditorModel: ObservableObject {
         report { try editor.transaction(name, operation); changed() }
     }
     func updateLayer(_ name: String, _ update: (inout RasterLayer) -> Void) {
+        guard selectedLayerIDs.count <= 1 else {
+            errorMessage = "请先选择一个图层，再编辑它。"
+            return
+        }
         guard let id = document.activeLayerID else { return }
         edit(name) { document in
             guard !document.isEffectivelyLocked(id), let index = document.layers.firstIndex(where: { $0.id == id }) else { throw DocumentError.lockedLayer }
@@ -113,13 +123,21 @@ final class EditorModel: ObservableObject {
         }
     }
     func select(_ layer: RasterLayer) {
+        if isLayerMultiSelecting { toggleLayerSelection(layer.id); return }
         if document.activeLayerID != layer.id { cancelTransform() }
-        report { try editor.selectLayer(layer.id); objectWillChange.send(); scheduleSave() }
+        layerEditTarget = .pixels
+        report {
+            try editor.selectLayer(layer.id)
+            selectedLayerIDs = [layer.id]
+            objectWillChange.send(); scheduleSave()
+        }
     }
     func undo() { cancelTransform(); report { try editor.undo(); changed() } }
     func redo() { cancelTransform(); report { try editor.redo(); changed() } }
     func changed() { cancelTransform(); refresh(); scheduleSave() }
     func refresh() {
+        synchronizeLayerSelection()
+        normalizeLayerEditTarget()
         objectWillChange.send()
         report {
             preview = try renderer.render(document)
@@ -151,6 +169,7 @@ final class EditorModel: ObservableObject {
     }
     func open(_ url: URL) {
         cancelTransform()
+        layerEditTarget = .pixels
         saveNow(); guard !saveFailed else { return }
         report {
             let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
@@ -164,6 +183,7 @@ final class EditorModel: ObservableObject {
     }
     func create(name: String, width: Int, height: Int) {
         cancelTransform()
+        layerEditTarget = .pixels
         saveNow(); guard !saveFailed else { return }
         report {
             _ = try RasterImage.context(width: width, height: height)
@@ -240,7 +260,7 @@ final class EditorModel: ObservableObject {
         }
     }
     func selectionToLayerMask() {
-        guard let layer = activeLayer, !layer.isGroup else { return }
+        guard let layer = activeLayer, !layer.isGroup, selectedLayerIDs.count <= 1 else { return }
         report {
             let full = try selectionPreview ?? RasterImage.solidMask(width: document.width, height: document.height, white: true)
             guard let mask = try renderer.localSelection(full, layer: layer, document: document) else { return }
@@ -249,6 +269,14 @@ final class EditorModel: ObservableObject {
         }
     }
     func fill() {
+        if layerEditTarget == .mask {
+            fillLayerMask(reveal: tool != .eraser && maskPaintReveals)
+            return
+        }
+        guard selectedLayerIDs.count <= 1 else {
+            errorMessage = "请先选择一个图层，再填充。"
+            return
+        }
         guard let layer = activeLayer, !layer.isGroup else { return }
         report {
             let size = try renderer.pixelSize(of: layer)

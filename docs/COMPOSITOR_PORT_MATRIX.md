@@ -2,9 +2,40 @@
 
 盘点日期：2026-10-20。产品范围仍以 [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md) 为准；本文区分上游源码存在、iPad 已实现和实际运行验证，不能将其中任意一种当作另外两种。
 
-## 版本与基线验证
+## 官方主线复核与开发顺序
 
-- 上游：[qidian2022/Compositor-ZH，zh-Hans](https://github.com/qidian2022/Compositor-ZH/tree/zh-Hans)。本次获取并审查的 HEAD 为 [`7c2a5a4a3e7f685a8a0ec282ef0b4284f20b5477`](https://github.com/qidian2022/Compositor-ZH/tree/7c2a5a4a3e7f685a8a0ec282ef0b4284f20b5477)，与 Mac 交接记录完全相同，无新增提交差异。
+2026-10-20 按用户指定重新核对官方仓库 [robbietilton/Compositor](https://github.com/robbietilton/Compositor)，固定为 [`365b5745eda537f984f3d5bed1e53c361dbc9c91`](https://github.com/robbietilton/Compositor/tree/365b5745eda537f984f3d5bed1e53c361dbc9c91)。本节依据该提交的 [README](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/README.md) 和下列相关源码；它与后文曾构建、测试的中文分支基线是两个不同的检查对象。本次未运行官方主线 Mac target，不能沿用中文分支的构建结果证明它可运行。
+
+**继续参考并移植 Compositor 是合理的。** 当前 iPad 已有独立文档、事务、渲染和网络边界，应优先抽取上游参数、像素算法、图层关系规则及测试样例，接入这些边界。上游的 `EditorSession`、AppKit 面板、鼠标事件、桌面窗口和 GPU 视图不能整体搬进 UIKit；Pencil、触控手柄、后台保存及设备内存预算必须继续单独适配。无需推倒已经验收的 iPad 文稿、选区和 AI 链路，也不能只依照 README 重做一套简化算法。
+
+本表包含 `c107ece` 的已验收自由变换，以及本轮 `mac/layer-compositing` 的蒙版/合并实现；后者的自动化与真机验证分别见 [IPAD_STATUS.md](IPAD_STATUS.md)。**实现、测试通过和真机验收仍分别记录，后续计划不属于已完成能力**：
+
+| 工作 | 官方主线依据 | iPad 当前缺口与移植重点 |
+| --- | --- | --- |
+| 图层蒙版 | [`LayerMask.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerMask.swift) 有灰度覆盖、独立 `placement`、链接状态和蒙版画笔入口；README 列出绘制、填充、反相、模糊及羽化。 | 已接入图像/蒙版编辑目标、全白新建、直接绘制、填充、反相、载入选区、启停及删除；黑色隐藏、白色恢复，原像素保持不变，软选区限制覆盖。尚缺蒙版专用模糊/羽化、独立位置/未链接蒙版和组蒙版，不能将可绘制的链接蒙版称为完整蒙版工具集。 |
+| 多层选择、合并与整理 | [`LayerGroups.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerGroups.swift) 管理选择集合、后代、分组及移出；[`LayerMerge.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerMerge.swift) 区分向下合并、多选合并和组合并。 | 已接入多选导航、向下/多选/组合并和默认隐藏的画布盖印。合并限同父组连续项目、可见未锁定内容、正常混合及全不透明的外部父组；保留组后代和同级插入次序、完整画布外范围，一步撤销恢复原层。盖印仅包含画布内可见内容且保留源层。跨组/不连续/混合依赖暂不合并，已有层重新分组界面和多层共同变换仍待开发。 |
+| 剪贴与组表现 | [`LiveLayerMask.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LiveLayerMask.swift) 有剪贴关系、循环校验、删除/合并后的处理；`LayerGroups.swift` 和 `LayerAppearance.swift` 定义层级与透明度规则。 | 目前为穿透组和 12 种混合，没有剪贴关系、组蒙版或完整混合模式。新增关系必须贯通渲染、复制、移组、删除、合并和工程读写，不能只增加一个按钮。 |
+| 曲线、色阶与可编辑调整层 | [`Curves.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/Curves.swift) 有 RGB/单通道控制点、保形 Hermite 插值与查找表；[`LayerAdjustment.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerAdjustment.swift) 保存曲线、色阶等参数。 | 当前只有应用后改变像素的亮度、对比度、饱和度和模糊。下一阶段抽取曲线/色阶参数与运算，补触控控制点、实时预览及可重开编辑的调整层；同时定义对下方内容、组、剪贴、蒙版和软选区的作用范围。 |
+| 绘画与修图 | README 列出平滑笔刷、渐变、仿制、修复和局部模糊；相关入口为 `BrushStroke.swift`、`Gradient.swift`、`CloneStamp.swift`、`ContentFill.swift`、`BlurTool.swift`。 | 基础 Pencil、橡皮、填充和吸色已具备；尚缺完整笔刷预设/预测输入、渐变、仿制、修复及局部模糊。应按笔迹事务、采样范围和软选区一致性逐项接入，性能与手感持续测量。 |
+| 后续几何与选区 | README 列出多层/组变换、扭曲、吸附、魔棒/对象/主体选择、扩选/缩选和移动选区轮廓。 | 单栅格层及选中像素自由变换、套索/多边形/矩形/椭圆和羽化已完成；上述多层变换、吸附/透视、魔棒、自动选取、扩缩和独立移动选区轮廓仍缺。不得把支持移动选中像素等同于已支持所有选区操作。 |
+| 文字、形状及图层效果 | README 列出可编辑文字、基本形状；[`LayerEffects.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerEffects.swift) 保存描边、阴影、颜色叠加和内外发光等效果。 | 尚未移植。应保留样式和参数，支持保存后重编；中文排版/缺字体、像素化转换、效果扩边及蒙版次序需独立验收。 |
+| 调色滤镜、工作区与文件交换 | README 列出 Camera Raw、更多滤镜、多标签、导航器、裁切、辅助线/网格及 PSD/PSB；[`CameraRaw.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/CameraRaw.swift) 有参数、像素处理及桌面会话交互。 | 上述高级编辑/工作区尚未覆盖；现有 `.comp` 栅格子集和 PNG/JPEG 导出不等于完整上游格式或 PSD 支持。PSD 先建立可保留编辑性、只保留外观、拒绝导入三类兼容报告，Camera Raw 等大型模块在常用图层与调色流程稳定后推进。 |
+| 性能、保存和移动端运行 | 官方 README 有大文档、后台保存和缩略渲染；上游提供 `TiledLayerRenderer.swift`、`GPUCanvas.swift`、`DownsampleCache.swift`。 | 当前 CG/CI 全图层栈合成、4096 单边/1600 万像素面上限、会话内历史仍有规模限制。分块/GPU 合成、低内存恢复、长笔迹与后台行为应贯穿各阶段，预算必须来自目标 iPad 测量，不能复制 Mac 物理内存公式。 |
+
+README 用于发现功能，具体支持范围仍以源码和运行结果为准。例如官方 README 写 PSD/PSB “8-bit RGB; not CMYK”，但该提交 [`PSDReader.swift`](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/IO/PSD/PSDReader.swift) 实际允许 8 位 RGB 或 CMYK，并将 CMYK 转为 RGB；这既不代表 iPad 已支持，也不代表保留 CMYK 文稿。类似地，部分上游内部路径支持 16 位/HDR，不能据此推出 PSD 支持 16 位导入或导出。
+
+### 接下来按完整操作流程交付
+
+1. **先收好本轮图层合成并补齐余项**：可绘制蒙版、多选、合并/盖印已接入，先完成真实草稿验收；随后推进组内整理、剪贴蒙版与更完整的组表现。验收必须包括原像素保留、隐藏/锁定层、半透明软边、组内层序、一步撤销/重做、保存重开，以及离线操作。
+2. **随后完成常用调色**：曲线、色阶及可编辑调整层。验收包括 RGB/单通道、透明像素、选区与蒙版约束、图层顺序影响、预览/提交一致、取消不改文稿和重开后参数仍可编辑。
+3. **再扩展绘画和修图工具**：笔刷手感、渐变、仿制/修复、更多选区和多层变换，然后文字/形状、图层效果及常用滤镜。按真实作品遇到的阻碍调整同阶段顺序。
+4. **逐步扩大交换与规模**：PSD/PSB 能力报告、上游 `.comp` 更多记录、工作区及大画布性能；持续验证备份恢复、低内存和后台保存。AI 继续使用现有 Windows 桥接，普通编辑保持离线可用。
+
+每项提交都应同时交付可用入口、统一事务、工程往返和有代表性的回归测试；核心像素测试可复用上游样例，Pencil/触控/内存仍以 iPad 实测为准。以上为优先级和验收门槛，不是本次一次性完成所有项目的承诺。
+
+## 早期中文分支基线与验证记录
+
+- 早期上游基线：[qidian2022/Compositor-ZH，zh-Hans](https://github.com/qidian2022/Compositor-ZH/tree/zh-Hans)。当时获取并审查的 HEAD 为 [`7c2a5a4a3e7f685a8a0ec282ef0b4284f20b5477`](https://github.com/qidian2022/Compositor-ZH/tree/7c2a5a4a3e7f685a8a0ec282ef0b4284f20b5477)，与 Mac 交接记录完全相同。本条仅描述该次检查，不表示它是官方主线最新版本。
 - 上游 `AGENTS.md`、`README.md`、指定的画布、画笔、会话、工程存储入口和格式说明已阅读；上游应用源码和原 Mac target 保持原样；兼容性验证临时添加的测试已移除。
 - 基线平台：Apple Silicon、macOS 26.4、Xcode 26.6（17F113）。原 `Compositor` scheme 在 macOS 目标上 **构建成功**，关闭签名。首次受限构建无法启动 Swift Observation 宏插件，允许 Xcode 正常运行后成功，不属于源代码编译缺陷。
 - 原 Mac 构建仍产生已有的 Swift actor 隔离、Metal 弃用等警告。构建成功不代表所有上游功能经过人工操作验证，也不代表 iPad 兼容。
@@ -32,14 +63,14 @@ xcodebuild -project Compositor.xcodeproj -scheme Compositor \
 
 分类含义：**可复用**表示算法或数据规则可抽取；**需平台改造**表示含 AppKit、桌面交互或关联类型耦合；**缺失需开发**表示本次在相关入口未找到对应实现；**待验证**表示实现存在但还需平台、像素或设备验证。iPad 开发与验收记录见 [ipad_app/README.md](../ipad_app/README.md)。
 
-## 按产品范围核查
+## 中文分支源码明细与既有移植记录
 
 | 功能类别 | 上游实际源码与支持情况 | 复用分类与 iPad 改造方式 | 回归样本与 iPad 验收 | 移植状态 |
 | --- | --- | --- | --- | --- |
 | 文档与画布 | `Document/EditorSession.swift` 的 `CanvasDocument`、`ImageLayer` 保留 UUID、层序、资产与独立变换；`IO/ProjectStore.swift` 保存分层目录包。`Rendering/CanvasViewport.swift` 有拟合、锚点缩放、平移及双向坐标转换。`Document/ProjectWorkspace.swift` 有多标签；`CanvasSize.swift`、`Crop.swift`、`CanvasRotation.swift` 有画布尺寸、裁切及文档 90° 旋转。 | 文档/坐标**可复用**；工作区和文件面板**需平台改造**，含 `NSWindow`/`NSOpenPanel`。`CanvasViewport` 无视图旋转参数，文档 90° 旋转不等于自由旋转视图。自动保存/进程异常恢复在相关存储入口未找到，属**缺失需开发**。 | `ProjectTests.swift`、`CanvasSizeTests.swift`、`CropTests.swift`、`CanvasRotationTests.swift`、`NavigatorTests.swift`；iPad 应验证非方形画布四角、缩放锚点、保存重开、原子替换失败及恢复。 | **已实现基础子集**：`Core/CanvasDocument.swift`、`App/EditorModel.swift` 和 `App/CanvasView.swift` 提供本地分层文稿、新建/导入/文稿库切换、自动保存、拟合/平移/锚点缩放、画布宽高调整及按比例改变图层几何。自由视图旋转与统一正逆映射已接入；多标签并行编辑、完整裁切/重采样工具仍待开发。 |
 | 绘画与 Pencil | `Document/BrushStroke.swift` 有 256px 按需分块、硬度衰减、笔迹不透明度上限、平滑、选区裁切和笔迹提交；`EditorSession+Brush.swift` 管理工具事务；`Rendering/BrushPixels.c`、`MetalBrushCoverage.swift` 有 CPU/GPU 覆盖算法。`Gradient.swift` 支持线性/径向渐变；`SelectionEdits.swift` 支持填充。 | 软笔刷曲线、分块与覆盖算法**可复用**；整笔迹模块关联层、选区、深色彩和 Metal 类型，不能直接拷贝一文件。`EditorCanvas.swift` 的 `NSView`/`NSEvent` **需平台改造**。本次未找到 Pencil 的压力、倾斜、方位、合并/预测触点输入，属**缺失需开发**；`GPUCanvas` 的 pressure 是内存压力，不能视作笔压。 | `BrushTests.swift`、`LargeCanvasBrushTests.swift`、`NativeResolutionPaintTests.swift`、`BrushIntersectionTests.swift`、`GradientTests.swift`。真机需验证 Pencil 与手指区分、断续笔迹、压力、倾斜、防误触、橡皮和撤销。 | **已实现自有基础笔刷**：`App/BrushInput.swift`、`App/CanvasView.swift` 接入 Pencil 压力、倾斜/方位及合并触点，支持硬度/大小/浓度、橡皮、选区约束、吸色和填充；区分手指导航与绘画，每笔提交单次事务。完整上游分块笔刷、预测触点、笔刷预设与渐变未移植；真实 Pencil 手感、防误触和延迟待验收。 |
-| 图层体系 | `EditorSession.swift`、`LayerGroups.swift`、`LayerMerge.swift`、`LayerAppearance.swift`、`LiveLayerMask.swift` 支持新建/复制/排序/合并、组、透明度、混合、剪贴来源。`LayerMask.swift` 有启用、链接、独立位置与灰度规则。`ImageLayer` 和 `ProjectLayerRecord` 未见图层锁定字段。 | 模型、组合法性、合成次序和蒙版**可复用**；需剥离 `EditorSession` 的桌面 UI 状态。`LayerAppearance` 枚举含 24 种模式；部分必须走 Core Image，不能统一映射为普通 Core Graphics 混合。图层锁定**缺失需开发**。 | `LayerTests.swift`、`GroupTests.swift`、`LayerAppearanceTests.swift`、`LayerMaskTests.swift`、`LiveMaskTests.swift`。透明底 + 半透明红蓝层、组中组、剪贴环、蒙版独立移动和保存重开是必要样本。 | **已实现基础图层体系**：`Core/DocumentEditor.swift`、`Core/LayerGeometry.swift` 与 `Rendering/DocumentRenderer.swift` 支持新建/复制/删除/同级排序、可见性、不透明度、锁定、穿透组层级、12 种直接实现的混合模式和链接式灰度图层蒙版。界面可新建组并在组内建层；已有层重新分组仅有核心 API。合并/盖印、剪贴关系、独立蒙版位置、组蒙版及其余混合模式未接入。 |
-| 选区与蒙版 | `Document/Selection.swift` 有矩形、椭圆、自由/多边形套索、羽化、扩展/收缩；`MagicWand.swift`、`ColorRangeSelection.swift`、`ObjectSelection.swift` 有颜色与对象选区；`SelectionEdits.swift` 将作用域用于像素编辑。`SelectionMode` 只有 replace/add/subtract；路径与画布求交不等于用户可用的选区交集模式。 | 路径/灰度覆盖和几何**可复用**，AppKit 工具与 Vision 对象选择**需平台改造及验证**；交集模式需补齐。灰度蒙版须无 alpha、无颜色转换；UI 显示用的红色遮罩不可直接拿来上传。 | `SelectionTests.swift`、`SelectionFeatherTests.swift`、`SelectionEditTests.swift`、`MagicWandTests.swift`、`MaskTransformTests.swift`；全黑、全白、128 灰度、羽化边缘和非零裁切原点。 | **已实现常用形状选区**：`Rendering/SelectionMask.swift` 适配上游路径光栅化、Gaussian sigma=radius/2 羽化和边缘钳制，补充灰度 max/饱和减/min 组合与交集；自由套索采用 even-odd 规则。`App/SelectionGesture.swift` 适配文档坐标采样并增加触控多边形、参数冻结及取消语义，`EditorSelection.swift` 接入单步事务。矩形、椭圆、自由/多边形套索支持新建/添加/减去/相交和0–100像素羽化，保存同一灰度PNG，绘画/填充/调整/AI共享软边。原选区笔、反选、选区转图层蒙版保留。魔棒、边缘精修、独立蒙版画笔及未链接蒙版仍待开发。 |
+| 图层体系 | `EditorSession.swift`、`LayerGroups.swift`、`LayerMerge.swift`、`LayerAppearance.swift`、`LiveLayerMask.swift` 支持新建/复制/排序/合并、组、透明度、混合、剪贴来源。`LayerMask.swift` 有启用、链接、独立位置与灰度规则。`ImageLayer` 和 `ProjectLayerRecord` 未见图层锁定字段。 | 模型、组合法性、合成次序和蒙版**可复用**；需剥离 `EditorSession` 的桌面 UI 状态。`LayerAppearance` 枚举含 24 种模式；部分必须走 Core Image，不能统一映射为普通 Core Graphics 混合。图层锁定**缺失需开发**。 | `LayerTests.swift`、`GroupTests.swift`、`LayerAppearanceTests.swift`、`LayerMaskTests.swift`、`LiveMaskTests.swift`。透明底 + 半透明红蓝层、组中组、剪贴环、蒙版独立移动和保存重开是必要样本。 | **已实现基础图层体系**：`Core/DocumentEditor.swift`、`Core/LayerGeometry.swift` 与 `Rendering/DocumentRenderer.swift` 支持新建/复制/删除/同级排序、可见性、不透明度、锁定、穿透组层级、12 种直接实现的混合模式和链接式灰度图层蒙版。界面可新建组并在组内建层；已有层重新分组仅有核心 API。本轮 `App/EditorLayers.swift` 和 `Rendering/LayerMerge.swift` 接入多选、受限合并与隐藏盖印，限制和验证见本文开头及 IPAD_STATUS。剪贴关系、独立蒙版位置、组蒙版及其余混合模式未接入。 |
+| 选区与蒙版 | `Document/Selection.swift` 有矩形、椭圆、自由/多边形套索、羽化、扩展/收缩；`MagicWand.swift`、`ColorRangeSelection.swift`、`ObjectSelection.swift` 有颜色与对象选区；`SelectionEdits.swift` 将作用域用于像素编辑。`SelectionMode` 只有 replace/add/subtract；路径与画布求交不等于用户可用的选区交集模式。 | 路径/灰度覆盖和几何**可复用**，AppKit 工具与 Vision 对象选择**需平台改造及验证**；交集模式需补齐。灰度蒙版须无 alpha、无颜色转换；UI 显示用的红色遮罩不可直接拿来上传。 | `SelectionTests.swift`、`SelectionFeatherTests.swift`、`SelectionEditTests.swift`、`MagicWandTests.swift`、`MaskTransformTests.swift`；全黑、全白、128 灰度、羽化边缘和非零裁切原点。 | **已实现常用形状选区**：`Rendering/SelectionMask.swift` 适配上游路径光栅化、Gaussian sigma=radius/2 羽化和边缘钳制，补充灰度 max/饱和减/min 组合与交集；自由套索采用 even-odd 规则。`App/SelectionGesture.swift` 适配文档坐标采样并增加触控多边形、参数冻结及取消语义，`EditorSelection.swift` 接入单步事务。矩形、椭圆、自由/多边形套索支持新建/添加/减去/相交和0–100像素羽化，保存同一灰度PNG，绘画/填充/调整/AI共享软边。原选区笔、反选、选区转图层蒙版保留。本轮 `App/EditorLayerMask.swift` 支持直接绘制链接蒙版、填充/反相/载入选区；目标切换和灰度覆盖独立于像素编辑。魔棒、边缘精修、蒙版专用羽化/模糊及未链接蒙版仍待开发。 |
 | 几何编辑 | `Document/LayerTransform.swift` 有位移、旋转、翻转、缩放、比例锁、中心/边缘锚点与吸附；`Distort.swift`、`Rendering/MetalWarp.swift` 有四角扭曲；`SmudgeLiquify.swift` 有涂抹/液化。 | `LayerTransform` 的多数数学**可复用**，但 `unitToDocument` 依赖 `BrushRaster`，部分编辑结构依赖浮动选区；需抽取公共几何层。鼠标手柄/快捷键需替换为触控交互，Metal 能力及边界采样**待验证**。 | `TransformTests.swift`、`ResizeSnapTests.swift`、`DistortTests.swift`、`MetalWarpTests.swift`、`MaskTransformTests.swift`；带棋盘透明边的旋转图层、翻转、非整数原点、选区和蒙版随动。 | **已实现普通栅格层自由变换**：`Core/FreeTransform.swift` 适配上游固定锚点缩放和旋转增量，`App/TransformOverlay.swift` 提供八个触控手柄与任意角度旋转柄，支持比例锁定、连续预览、完成/取消及单步撤销。原PNG与链接蒙版共用几何，预览与提交一致；空层、锁定层和组明确拒绝。`CanvasViewport.swift` 新增视图旋转，绘画、软选区和控制点共用正逆矩阵；上游该文件没有旋转，此部分为iPad扩展。既有移动、翻转/90°旋转和画布尺寸功能保留。有选区时，`Rendering/SelectionTransform.swift` 适配上游 `FloatingSelection.swift` / `SelectionClipboard.swift` / `BrushStroke.swift` 的剪出与合成，选中像素与灰度覆盖一起变换、一次撤销；独立图层蒙版保持原位；普通扩边保留原生像素网格，旋转或平滑缩放层需要越界时由 `LayerRegrid.swift` 按当前文稿显示尺寸固定外观后继续，界面明确提示，取消/撤销恢复原图层。iPad 的重叠合成补偿避免羽化/半透明选区在原位变淡。组变换、吸附/透视、扭曲和液化仍未实现，真机状态见IPAD_STATUS。 |
 | 色彩与调整 | `Document/LayerAdjustment.swift` 有可保存的色阶、曲线、HSV、曝光、渐变映射、颗粒、噪点、模糊、反相、黑白和色彩平衡；`Levels.swift`、`Curves.swift`、`HueSaturation.swift`、`ImageAdjustments.swift` 与 C 像素实现提供处理。 | 参数、查找表与算法**可复用**；多个文件直接 `import AppKit` 且包含会话/面板行为，需拆开。不可把“已有曝光/色彩平衡”直接称为独立亮度/对比度工具已完成。可编辑调整层和选区作用域都必须保留。 | `AdjustmentLayerTests.swift`、`LevelsTests.swift`、`HueSaturationTests.swift`、`ImageAdjustmentTests.swift`、`PSDAdjustmentTests.swift`；灰阶/色阶图、调整顺序、组和蒙版影响域。 | **已实现可撤销的基础像素调整**：`Rendering/DocumentRenderer.adjusted` 使用 Core Image 处理亮度、对比度、饱和度和高斯模糊；`App/EditorModel.adjustmentImage/applyAdjustment` 预览并按选区应用，保留图层蒙版。未移植上游可编辑调整图层、色阶、曲线、完整 HSV/曝光/色彩平衡等，不宣称完整调色工作流。 |
 | 修图与滤镜 | `Document/CloneStamp.swift`、`BlurTool.swift`、`ContentFill.swift`、`SmudgeLiquify.swift`、`Filters.swift` 有仿制、模糊、修复/内容填充、液化及常用滤镜；`Rendering/HealPixels.c`、`PatchPixels.c`、`NoisePixels.c` 等包含像素算法。 | C 与 CG/CI 算法**可复用**，调用方仍依赖桌面会话及取样交互；需以共享文档事务接入，避免只复制 C 文件便声称工具可用。GPU/大图性能**待验证**。 | `CloneStampTests.swift`、`SpotHealingTests.swift`、`BlurBrushTests.swift`、`FilterTests.swift`、`FinishingFilterTests.swift`、`ProgressiveBlurTests.swift`；源点对齐、跨层取样、透明边缘、软选区、撤销。 | **已接入高斯模糊的图层像素调整**；仿制、局部模糊笔刷、修复/内容填充、液化及其余上游滤镜未移植，不能把一个 CI 模糊操作当作完整修图工具集。 |
@@ -53,13 +84,15 @@ xcodebuild -project Compositor.xcodeproj -scheme Compositor \
 
 本次已抽取或改写 `CanvasViewport.swift` 的文档/屏幕坐标与锚点缩放、`BrushRaster.falloff` 的规范化高斯笔刷衰减、`LayerTransform.swift` 的基础几何、`LayerGroups.swift` 的层级/穿透规则、`LayerAppearance.swift` 的受支持混合映射，以及 `ProjectStore.swift` 的清单和安全资源规则。文件级注释标明来源、固定提交和 MIT 许可证。独立 iPad 核心不等于已移植完整 Compositor 引擎。
 
-基础图层组、链接蒙版、历史及 `.comp` 子集已经接入；后续按模型/渲染边界补齐高级选区/变换、非破坏性调整、修图和文字形状，同时推进分块笔刷与 GPU 合成。图层组蒙版、剪贴图及上游复杂文档兼容性仍须逐项扩展和验证，不能由基础组/蒙版样例推断。
+基础图层组、可绘制的链接蒙版、多选及受限合并、历史和 `.comp` 子集已经接入；后续按模型/渲染边界补齐剪贴关系、高级选区/变换、非破坏性调整、修图和文字形状，同时推进分块笔刷与 GPU 合成。图层组蒙版、剪贴图及上游复杂文档兼容性仍须逐项扩展和验证，不能由基础组/蒙版样例推断。
 
 上游的 `ProjectStore` 虽未直接导入 AppKit，仍引用 `ImportedImage`、`LayerAdjustment`、`LayerTextStyle`、`LayerEffects`、`DeepLayer` 等类型，不能把它标记为“直接搬到 iOS 即可”。类似地，Metal/C 文件存在并不等于整条调用路径跨平台。
 
 本次使用 UIKit 输入和自有栅格笔刷，没有用 PencilKit 代替编辑器核心。图层/像素/选区/蒙版保存为分层工程，任务和原始请求独立持久化，编辑历史在当前会话保留。压力/倾斜的采样与笔刷效果已有实现及测试，真实硬件体验仍需单独验收。
 
-## 验证状态
+## 历史验证记录
+
+下表保留首次移植阶段的构建与测试证据，数字和当时“待验收”项不代表当前最新状态。截至本轮盘点，`c107ece` 的完整 SwiftPM 108 项、iPad 原生单测 60 项和 UI 测试 5 项通过；用户已确认选区/取消选区、整层及选区自由变换和越界修复正常，并在此前确认 AI 锁屏恢复、备份成功及重开图层保留。后续逐轮记录以 [IPAD_STATUS.md](IPAD_STATUS.md) 为准，未将这些确认扩大到完整断网、低内存或长时间 Pencil 性能验收。
 
 | 验证 | 本次结果 | 可以得出的结论 |
 | --- | --- | --- |

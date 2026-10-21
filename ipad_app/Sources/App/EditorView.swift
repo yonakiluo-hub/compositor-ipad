@@ -56,7 +56,11 @@ struct EditorView: View {
                 }
                 Divider()
                 if model.transformSession != nil { transformBar }
-                else { ScrollView(.horizontal, showsIndicators: false) { brushBar.frame(minWidth: min(900, geometry.size.width)) } }
+                else { ScrollView(.horizontal, showsIndicators: false) {
+                    brushBar.frame(minWidth: model.layerEditTarget == .mask && !model.tool.isSelection
+                        ? max(1460, geometry.size.width) : min(900, geometry.size.width))
+                }
+                    .accessibilityIdentifier("editor.brushBar") }
             }
             .background(Color(red: 0.12, green: 0.14, blue: 0.17))
             .onAppear { compactLayout = geometry.size.width < 700; if compactLayout { sidebar = false } }
@@ -133,7 +137,8 @@ struct EditorView: View {
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }.disabled(!model.editor.canUndo).accessibilityLabel("撤销").accessibilityIdentifier("editor.undo")
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }.disabled(!model.editor.canRedo).accessibilityLabel("重做").accessibilityIdentifier("editor.redo")
             Divider().frame(height: 22)
-            Button { showAdjustments = true } label: { Image(systemName: "slider.horizontal.3") }.disabled(model.activeLayer?.pngData == nil).accessibilityLabel("调整图层")
+            Button { model.setLayerEditTarget(.pixels); showAdjustments = true } label: { Image(systemName: "slider.horizontal.3") }
+                .disabled(model.activeLayer?.pngData == nil || model.selectedLayerIDs.count > 1).accessibilityLabel("调整图层")
             Button { panel = 1; sidebar = true } label: { Label("AI", systemImage: "sparkles") }.accessibilityIdentifier("editor.ai")
             Button { sidebar.toggle() } label: { Image(systemName: "sidebar.right") }.accessibilityLabel("图层与 AI 面板")
         }.padding(.horizontal, 20).frame(height: 64)
@@ -150,7 +155,10 @@ struct EditorView: View {
                 }
                 Divider().padding(.vertical, 8)
                 ColorPicker("前景色", selection: $model.color, supportsOpacity: false).labelsHidden().frame(width: 40, height: 44)
-                Button { model.fill() } label: { Image(systemName: "drop.fill").font(.title3).frame(width: 46, height: 44) }.accessibilityLabel("填充图层或选区")
+                    .disabled(model.layerEditTarget == .mask && !model.tool.isSelection)
+                Button { model.fill() } label: { Image(systemName: "drop.fill").font(.title3).frame(width: 46, height: 44) }
+                    .accessibilityLabel(model.layerEditTarget == .mask ? "填充图层蒙版" : "填充图层或选区")
+                    .accessibilityIdentifier("editor.fill")
                 Menu {
                     Button("取消选区") { model.clearSelection() }
                     Button("反选") { model.invertSelection() }
@@ -158,7 +166,7 @@ struct EditorView: View {
                     Button("选区转图层蒙版") { model.selectionToLayerMask() }
                 } label: { Image(systemName: "selection.pin.in.out").font(.title3).frame(width: 46, height: 44) }.accessibilityLabel("选区操作")
             }.padding(.vertical, 16).padding(.horizontal, 6)
-        }.frame(width: 60)
+        }.frame(width: 60).accessibilityIdentifier("editor.tools")
     }
     private var transformBar: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -208,6 +216,15 @@ struct EditorView: View {
                     Button("羽化当前选区…") { showSelectionFeather = true }.disabled(model.selectionPreview == nil)
                 }
             } else {
+                if model.layerEditTarget == .mask && !model.tool.isSelection {
+                    Picker("蒙版画笔", selection: Binding(get: { model.maskPaintReveals }, set: { model.chooseMaskPaintMode(reveals: $0) })) {
+                        Text("黑色隐藏").tag(false)
+                        Text("白色显示").tag(true)
+                    }.pickerStyle(.segmented).frame(width: 180).accessibilityIdentifier("mask.paintMode")
+                    Text(model.activeLayer?.maskEnabled == true ? "正在绘制蒙版" : "蒙版已停用，启用后显示效果")
+                        .foregroundStyle(.secondary).accessibilityIdentifier("mask.editingState")
+                    Button("返回图像") { model.setLayerEditTarget(.pixels) }.accessibilityIdentifier("mask.exit")
+                }
                 HStack { Text("大小"); Slider(value: $model.diameter, in: 1...200); Text("\(Int(model.diameter))").monospacedDigit().frame(width: 30) }.frame(maxWidth: 260)
                 HStack { Text("硬度"); Slider(value: $model.hardness, in: 0...1) }.frame(maxWidth: 180)
                 HStack { Text("浓度"); Slider(value: $model.brushOpacity, in: 0.05...1) }.frame(maxWidth: 180)
@@ -225,8 +242,11 @@ struct EditorView: View {
     private var layersPanel: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("\(model.document.layers.count) 个图层").font(.caption).foregroundStyle(.secondary)
+                Text("\(model.document.layers.count) 个图层").font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("layers.count")
                 Spacer()
+                Button(model.isLayerMultiSelecting ? "完成" : "多选") {
+                    model.setLayerMultiSelecting(!model.isLayerMultiSelecting)
+                }.font(.caption).accessibilityIdentifier("layers.multiselect")
                 Button { model.addLayer(group: true) } label: { Image(systemName: "folder.badge.plus") }.accessibilityLabel("新建图层组")
                 Button { model.addLayer() } label: { Image(systemName: "plus") }.accessibilityLabel("新建图层").accessibilityIdentifier("layer.add")
             }.padding(.horizontal, 16).padding(.bottom, 12)
@@ -236,13 +256,23 @@ struct EditorView: View {
                         layerRow(entry)
                     }
                 }.padding(.horizontal, 10)
+            }.accessibilityIdentifier("layers.rows")
+            if model.isLayerMultiSelecting { multiLayerControls }
+            else if let layer = model.activeLayer {
+                ScrollView { layerControls(layer) }.frame(maxHeight: layer.maskPNGData == nil ? 310 : 400)
+                    .accessibilityIdentifier("layers.controls")
             }
-            if let layer = model.activeLayer { layerControls(layer) }
         }
     }
     private func layerRow(_ entry: LayerHierarchyEntry) -> some View {
         let layer = entry.layer
         return HStack(spacing: 9) {
+            if model.isLayerMultiSelecting {
+                Button { model.toggleLayerSelection(layer.id) } label: {
+                    Image(systemName: model.selectedLayerIDs.contains(layer.id) ? "checkmark.circle.fill" : "circle")
+                        .frame(width: 24, height: 36)
+                }.accessibilityLabel("选择 \(layer.name)").accessibilityIdentifier("layer.select.\(layer.name)")
+            }
             Button { model.toggleVisible(layer.id) } label: { Image(systemName: layer.isVisible ? "eye" : "eye.slash").frame(width: 24) }.accessibilityLabel("切换 \(layer.name) 可见性")
             Button { model.select(layer) } label: {
                 HStack(spacing: 9) {
@@ -251,6 +281,8 @@ struct EditorView: View {
                         if let data = layer.pngData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFit() }
                         else { Image(systemName: layer.isGroup ? "folder" : "square.dashed").foregroundStyle(.secondary) }
                     }.frame(width: 40, height: 36)
+                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(
+                            model.document.activeLayerID == layer.id && model.layerEditTarget == .pixels ? Color.accentColor : .clear, lineWidth: 2))
                     VStack(alignment: .leading, spacing: 3) {
                         Text(layer.name).lineLimit(1).foregroundStyle(.primary)
                         Text(layer.isGroup ? "穿透组" : "\(Int(layer.opacity * 100))% · \(layer.blendMode.rawValue)\(layer.maskPNGData == nil ? "" : " · 蒙版")").font(.system(size: 10)).foregroundStyle(.secondary)
@@ -258,9 +290,20 @@ struct EditorView: View {
                     Spacer(minLength: 0)
                     if layer.isLocked { Image(systemName: "lock.fill").font(.caption) }
                 }
-            }.buttonStyle(.plain)
+            }.buttonStyle(.plain).accessibilityIdentifier("layer.row.\(layer.name)")
+            if let data = layer.maskPNGData, !model.isLayerMultiSelecting {
+                Button { model.selectLayerTarget(layer, target: .mask) } label: {
+                    ZStack {
+                        if let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFit() }
+                        if !layer.maskEnabled { Image(systemName: "slash.circle").foregroundStyle(.red) }
+                    }
+                    .frame(width: 32, height: 36).background(.black)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(
+                        model.document.activeLayerID == layer.id && model.layerEditTarget == .mask ? Color.accentColor : Color.secondary, lineWidth: 2))
+                }.buttonStyle(.plain).accessibilityLabel("编辑 \(layer.name) 蒙版").accessibilityIdentifier("layer.mask.\(layer.name)")
+            }
         }.font(.caption).padding(8).padding(.leading, CGFloat(entry.depth) * 12)
-            .background(model.document.activeLayerID == layer.id ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
+            .background(model.selectedLayerIDs.contains(layer.id) ? Color.accentColor.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 9))
     }
     private func layerControls(_ layer: RasterLayer) -> some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -281,11 +324,45 @@ struct EditorView: View {
                 HStack {
                     Button("缩小") { scaleLayer(0.9) }; Button("放大") { scaleLayer(1.1) }
                     Menu("蒙版") {
+                        Button("添加白色蒙版") { model.addLayerMask() }.disabled(layer.maskPNGData != nil)
                         Button("使用当前选区") { model.selectionToLayerMask() }
-                        Button(layer.maskEnabled ? "停用蒙版" : "启用蒙版") { model.updateLayer("蒙版状态") { $0.maskEnabled.toggle() } }.disabled(layer.maskPNGData == nil)
-                        Button("移除蒙版") { model.updateLayer("移除蒙版") { $0.maskPNGData = nil } }.disabled(layer.maskPNGData == nil)
+                        Button("编辑蒙版") { model.setLayerEditTarget(.mask) }.disabled(layer.maskPNGData == nil)
+                        Button("从蒙版载入选区") { model.layerMaskToSelection() }.disabled(layer.maskPNGData == nil)
+                        Button("反相蒙版") { model.invertLayerMask() }.disabled(layer.maskPNGData == nil)
+                        Button(layer.maskEnabled ? "停用蒙版" : "启用蒙版") { model.setLayerMaskEnabled(!layer.maskEnabled) }.disabled(layer.maskPNGData == nil)
+                        Button("移除蒙版") { model.removeLayerMask() }.disabled(layer.maskPNGData == nil)
+                    }.accessibilityIdentifier("mask.menu")
+                }
+                if layer.maskPNGData == nil {
+                    Button("添加图层蒙版") { model.addLayerMask() }.accessibilityIdentifier("mask.add")
+                } else {
+                    Picker("编辑对象", selection: Binding(get: { model.layerEditTarget == .mask }, set: { model.setLayerEditTarget($0 ? .mask : .pixels) })) {
+                        Text("图像").tag(false); Text("蒙版").tag(true)
+                    }.pickerStyle(.segmented).accessibilityIdentifier("layer.editTarget")
+                    if model.layerEditTarget == .mask {
+                        Text("黑色隐藏，白色恢复原图；选区会限制修改范围。").foregroundStyle(.secondary)
+                        HStack {
+                            Button("填黑") { model.fillLayerMask(reveal: false) }.accessibilityIdentifier("mask.fillBlack")
+                            Button("填白") { model.fillLayerMask(reveal: true) }.accessibilityIdentifier("mask.fillWhite")
+                            Button("反相") { model.invertLayerMask() }.accessibilityIdentifier("mask.invert")
+                        }
                     }
                 }
+            }
+            HStack {
+                if layer.isGroup {
+                    Button("合并组") { model.mergeSelectedLayers() }.disabled(mergeIssue(model.selectedMergePlan) != nil)
+                        .accessibilityIdentifier("layers.mergeGroup")
+                } else {
+                    Button("向下合并") { model.mergeLayerDown() }.disabled(model.mergeDownPlan.map { mergeIssue($0) != nil } ?? true)
+                        .accessibilityIdentifier("layers.mergeDown")
+                }
+                Spacer()
+                Button("盖印副本") { model.stampVisibleLayers() }.accessibilityIdentifier("layers.stamp")
+            }
+            Text("盖印副本先隐藏，避免重复叠加；源图层保留。").foregroundStyle(.secondary).font(.caption2)
+            if let issue = layer.isGroup ? mergeIssue(model.selectedMergePlan) : model.mergeDownPlan.flatMap({ mergeIssue($0) }) {
+                Text(issue).foregroundStyle(.secondary).font(.caption2).accessibilityIdentifier("layers.mergeIssue")
             }
             HStack(spacing: 20) {
                 Button { model.moveLayer(1) } label: { Image(systemName: "arrow.up") }.accessibilityLabel("图层上移")
@@ -295,6 +372,26 @@ struct EditorView: View {
                 Button(role: .destructive) { model.deleteLayer() } label: { Image(systemName: "trash") }.accessibilityLabel("删除图层")
             }.frame(maxWidth: .infinity)
         }.font(.caption).padding(16)
+    }
+    private var multiLayerControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+            Text("已选 \(model.selectedLayerIDs.count) 项").font(.subheadline.bold()).accessibilityIdentifier("layers.selectionCount")
+            Button("合并所选图层") { model.mergeSelectedLayers() }
+                .buttonStyle(.borderedProminent).disabled(mergeIssue(model.selectedMergePlan) != nil)
+                .accessibilityIdentifier("layers.mergeSelected")
+            if let issue = mergeIssue(model.selectedMergePlan) {
+                Text(issue).foregroundStyle(.secondary).accessibilityIdentifier("layers.mergeIssue")
+            } else {
+                Text("把所选图层合为一层，蒙版和透明度固定到像素；可以一步撤销。").foregroundStyle(.secondary)
+            }
+            Button("盖印画布副本") { model.stampVisibleLayers() }.accessibilityIdentifier("layers.stamp")
+            Text("副本先隐藏，源图层保留。选择一层后可继续绘画。").foregroundStyle(.secondary)
+        }.font(.caption).padding(16)
+    }
+    private func mergeIssue(_ result: Result<LayerMergePlan, Error>) -> String? {
+        if case .failure(let error) = result { return error.localizedDescription }
+        return nil
     }
     private var aiPanel: some View {
         ScrollView {

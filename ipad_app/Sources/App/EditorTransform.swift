@@ -67,6 +67,11 @@ extension EditorModel {
 
     @discardableResult
     func beginTransform() -> Bool {
+        guard selectedLayerIDs.count <= 1 else {
+            errorMessage = "请先选择一个图层，再使用自由变换。多图层共同变换将在后续加入。"
+            return false
+        }
+        layerEditTarget = .pixels
         if tool == .transform, let session = transformSession, session.matches(document) { return true }
         cancelTransform()
         guard let layer = activeLayer, !layer.isGroup else {
