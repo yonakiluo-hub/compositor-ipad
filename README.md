@@ -21,7 +21,7 @@ Windows Local Bridge → 本机 ComfyUI / NVIDIA GPU
 | --- | --- |
 | 最终产品目标、功能范围和阶段路线 | [产品需求](docs/PRODUCT_REQUIREMENTS.md) |
 | 构建与使用原生 iPad 端 | [iPad 客户端](ipad_app/README.md)、[实现与验证状态](docs/IPAD_STATUS.md) |
-| Mac agent 后续开发 | [Mac 开发交接](docs/MAC_AGENT_HANDOFF.md)、[上游移植清单](docs/COMPOSITOR_PORT_MATRIX.md) |
+| Mac agent 后续开发 | [新 agent 接手入口与最新顺序](docs/IPAD_NEXT_AGENT_HANDOFF.md)、[上游移植清单](docs/COMPOSITOR_PORT_MATRIX.md)；背景见 [旧 Mac 交接](docs/MAC_AGENT_HANDOFF.md) |
 | Windows 启动服务，或 Mac 启动模拟后端 | [桥接安装与运行](ipad_bridge/README.md) |
 | 两端网络接口、坐标、蒙版、重试 | [API v1](ipad_bridge/docs/API_V1.md) |
 | 两台电脑同步代码 | [Git 协作流程](docs/GIT_WORKFLOW.md) |

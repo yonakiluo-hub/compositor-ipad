@@ -2,6 +2,8 @@
 
 交接日期：2026 年 10 月 19 日，Asia/Shanghai。
 
+> **更换开发 agent 时先读 [新 agent 接手入口](IPAD_NEXT_AGENT_HANDOFF.md)**：从合并后的 main 继续，剪贴已验收，按用户最新顺序先做组内整理、组蒙版和多层共同变换，再进入曲线/色阶。本文件保留历史背景，不作为当前待办清单。
+
 > 2026-10-21 的 main 集成请先读[简短 iOS 交接](MAIN_INTEGRATION_IOS_20261021.md)：已包含剪贴蒙版与模型选择界面，跨端真机验证留待 iPad 在身边后完成。
 
 > 后续进展：本仓库现已新增可构建的原生 iPad 工程及基础编辑器。最新完成范围、构建命令、验证与限制以 [iPad 状态](IPAD_STATUS.md) 和 [客户端 README](../ipad_app/README.md) 为准。下文“尚未创建 iPad target”等内容是接手前的历史基线，不代表当前代码。
