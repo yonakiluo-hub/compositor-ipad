@@ -123,6 +123,9 @@ public final class DocumentEditor {
         guard document.layers.contains(where: { $0.id == id }) else { throw DocumentError.missingLayer }
         let ids = descendants(including: id)
         guard !ids.contains(where: { document.isEffectivelyLocked($0) }) else { throw DocumentError.lockedLayer }
+        guard !document.layers.contains(where: { !ids.contains($0.id) && $0.maskSourceID.map(ids.contains) == true }) else {
+            throw DocumentError.unsupported("仍有图层剪贴到待删除的基底层，请先解除剪贴关系，或删除包含它们的整个组")
+        }
         try transaction("删除图层") { document in
             document.layers.removeAll { ids.contains($0.id) }
             if let active = document.activeLayerID, ids.contains(active) { document.activeLayerID = document.layers.last?.id }
@@ -141,16 +144,64 @@ public final class DocumentEditor {
                         pngData: layer.pngData, transform: layer.transform, isVisible: layer.isVisible,
                         isLocked: layer.isLocked, opacity: layer.opacity, blendMode: layer.blendMode,
                         parentID: layer.parentID.map { mapping[$0] ?? $0 }, isGroup: layer.isGroup,
-                        maskPNGData: layer.maskPNGData, maskEnabled: layer.maskEnabled)
+                        maskPNGData: layer.maskPNGData, maskEnabled: layer.maskEnabled,
+                        maskSourceID: layer.maskSourceID.map { mapping[$0] ?? $0 })
         }
         try transaction("复制图层") { document in
             // Sibling order follows each root record, not the last descendant's array
             // position: children added later may sit beyond unrelated higher siblings.
-            let index = document.layers.firstIndex { $0.id == id }! + 1
+            // Copying a base must not split its existing stack. A clipped copy
+            // instead stays immediately above its source and shares the same base.
+            let siblings = document.layers.filter { $0.parentID == source.parentID }
+            let position = siblings.firstIndex { $0.id == id }!
+            let clippedAbove = siblings.dropFirst(position + 1).prefix { $0.maskSourceID == id }
+            let anchor = source.maskSourceID == nil ? (clippedAbove.last?.id ?? id) : id
+            let index = document.layers.firstIndex { $0.id == anchor }! + 1
             document.layers.insert(contentsOf: copies, at: index)
             document.activeLayerID = duplicateID
         }
         return duplicateID
+    }
+
+    /// The next lower sibling determines the clipping base, as in Compositor's
+    /// LiveLayerMask. A clipped sibling shares its original base, not its own alpha.
+    public func clippingBase(for layerID: UUID) throws -> UUID {
+        guard let layer = document.layers.first(where: { $0.id == layerID }) else { throw DocumentError.missingLayer }
+        guard !document.isEffectivelyLocked(layerID) else { throw DocumentError.lockedLayer }
+        guard !layer.isGroup else { throw DocumentError.unsupported("图层组暂不支持作为剪贴图层") }
+        if let source = layer.maskSourceID { return source }
+        guard !document.layers.contains(where: { $0.maskSourceID == layerID }) else {
+            throw DocumentError.unsupported("当前图层已有剪贴子层，请先解除它们的剪贴关系")
+        }
+        let siblings = document.layers.filter { $0.parentID == layer.parentID }
+        guard let index = siblings.firstIndex(where: { $0.id == layerID }), index > 0,
+              !siblings[index - 1].isGroup else {
+            throw DocumentError.unsupported("请在同组普通图层的上方创建剪贴蒙版")
+        }
+        return siblings[index - 1].maskSourceID ?? siblings[index - 1].id
+    }
+
+    public func setClipping(layerID: UUID, enabled: Bool) throws {
+        guard let layer = document.layers.first(where: { $0.id == layerID }) else { throw DocumentError.missingLayer }
+        guard !document.isEffectivelyLocked(layerID) else { throw DocumentError.lockedLayer }
+        if enabled {
+            guard layer.maskSourceID == nil else { return }
+            let source = try clippingBase(for: layerID)
+            try updateLayer(layerID, name: "创建剪贴蒙版") { $0.maskSourceID = source }
+        } else {
+            guard let source = layer.maskSourceID else { return }
+            let siblings = document.layers.filter { $0.parentID == layer.parentID }
+            let index = siblings.firstIndex { $0.id == layerID }!
+            // Releasing inside a stack also releases the children above it. This
+            // explicit action is undoable and never creates a detached dependency.
+            let releases = Set(siblings.dropFirst(index).prefix { $0.maskSourceID == source }.map(\.id))
+            guard !releases.contains(where: { document.isEffectivelyLocked($0) }) else { throw DocumentError.lockedLayer }
+            try transaction("解除剪贴蒙版") { document in
+                for index in document.layers.indices where releases.contains(document.layers[index].id) {
+                    document.layers[index].maskSourceID = nil
+                }
+            }
+        }
     }
 
     /// Offset among siblings in bottom-to-top order; +1 raises the layer one position.
