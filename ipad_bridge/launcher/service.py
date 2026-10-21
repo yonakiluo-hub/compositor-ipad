@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
+from dataclasses import fields
 from pathlib import Path
 
 import httpx
@@ -93,6 +94,16 @@ class ServiceManager:
         self.config = config
         self.startup_timeout = startup_timeout
 
+    def _bridge_dependency_args(self):
+        # PR4 can run beside V1 and after the independent V0.2 merge. Inspect
+        # the local class without constructing Settings or touching its data.
+        from bridge.config import Settings
+        supported = {field.name for field in fields(Settings)}
+        if {"comfy_models_dir", "comfy_install_dir"} <= supported:
+            return ["--comfy-models-dir", self.config.models_dir,
+                    "--comfy-install-dir", self.config.comfy_install]
+        return []
+
     def _json(self, origin, path, token=None, timeout=4):
         # Local requests must not use a system proxy or follow redirects with credentials.
         try:
@@ -170,7 +181,10 @@ class ServiceManager:
                 kernel.LocalFree(pointer)
             def argument(name):
                 return args[args.index(name) + 1]
-            return (argument("-m") == "bridge" and "serve" in args
+            dependencies = self._bridge_dependency_args()
+            return (all(Path(argument(flag)).resolve() == Path(value).resolve()
+                        for flag, value in zip(dependencies[::2], dependencies[1::2]))
+                    and argument("-m") == "bridge" and "serve" in args
                     and Path(argument("--data-dir")).resolve() == Path(self.config.data_dir).resolve()
                     and argument("--backend") == "comfyui"
                     and argument("--comfy-url").rstrip("/") == self.config.comfy_url
@@ -319,6 +333,8 @@ class ServiceManager:
         values = [config.bridge_python, config.data_dir, str(config.bridge_port), str(config.comfy_port)]
         if name == "ComfyUI":
             values.extend([config.comfy_install, config.models_dir, config.runtime_dir])
+        elif name == "桥接":
+            values.extend(self._bridge_dependency_args())
         return hashlib.sha256(json.dumps(values).encode("utf-8")).hexdigest()
 
     def _pending_process(self, name):
@@ -387,7 +403,7 @@ class ServiceManager:
             try:
                 process = subprocess.Popen([config.bridge_python, "-m", "bridge", "serve", "--data-dir", config.data_dir,
                                             "--backend", "comfyui", "--comfy-url", config.comfy_url,
-                                            "--host", "0.0.0.0", "--port", str(config.bridge_port)],
+                                            "--host", "0.0.0.0", "--port", str(config.bridge_port)] + self._bridge_dependency_args(),
                                            cwd=BRIDGE_ROOT, env=env, stdout=out, stderr=err, creationflags=_hidden())
             except OSError:
                 # Popen failed before creating a child; allow corrected settings to retry.

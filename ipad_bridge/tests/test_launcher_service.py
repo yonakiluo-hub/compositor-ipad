@@ -2,7 +2,7 @@ import json
 import subprocess
 import tempfile
 import unittest
-from dataclasses import replace
+from dataclasses import make_dataclass, replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -242,6 +242,38 @@ class LauncherTests(unittest.TestCase):
                 self.manager._launch_bridge()
             spawn.assert_not_called()
         self.assertNotIn("桥接", self.manager._state())
+
+    def test_bridge_dependency_paths_forward_only_when_local_settings_support_them(self):
+        self.pair()
+        legacy = make_dataclass("LegacySettings", [("data_dir", Path)])
+        modern = make_dataclass("ModernSettings", [("data_dir", Path),
+                                                   ("comfy_models_dir", Path), ("comfy_install_dir", Path)])
+        expected_legacy = [self.config.bridge_python, "-m", "bridge", "serve", "--data-dir", self.config.data_dir,
+                           "--backend", "comfyui", "--comfy-url", self.config.comfy_url,
+                           "--host", "0.0.0.0", "--port", str(self.config.bridge_port)]
+        for settings, extension in ((legacy, []), (modern, ["--comfy-models-dir", self.config.models_dir,
+                                                          "--comfy-install-dir", self.config.comfy_install])):
+            with self.subTest(settings=settings.__name__), patch("bridge.config.Settings", settings), \
+                    patch("launcher.service.subprocess.Popen") as spawn, patch.object(self.manager, "_record"):
+                self.manager._launch_bridge()
+                args = spawn.call_args.args[0]
+                self.assertEqual(args, expected_legacy + extension)
+                self.assertNotIn("--enable-experimental", args)
+                self.assertNotIn(self.token, str(args))
+
+    def test_new_dependency_paths_participate_in_pending_bridge_identity(self):
+        legacy = make_dataclass("LegacySettings", [("data_dir", Path)])
+        modern = make_dataclass("ModernSettings", [("data_dir", Path),
+                                                   ("comfy_models_dir", Path), ("comfy_install_dir", Path)])
+        for settings in (legacy, modern):
+            with self.subTest(settings=settings.__name__), patch("bridge.config.Settings", settings):
+                old_key = self.manager._config_key("桥接")
+                for field in ("models_dir", "comfy_install"):
+                    changed = ServiceManager(replace(self.config, **{field: str(self.root / "different path")}))
+                    if settings is modern:
+                        self.assertNotEqual(changed._config_key("桥接"), old_key)
+                    else:
+                        self.assertEqual(changed._config_key("桥接"), old_key)
 
     def test_comfy_helper_timeout_preserves_intent_without_retry(self):
         self.pair()
