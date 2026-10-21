@@ -1,4 +1,4 @@
-# Compositor Local Bridge v0.1
+# Compositor Local Bridge v0.2
 
 iPad 绘画 → 局域网上传画面和蒙版 → Windows ComfyUI 生成 → iPad 新图层。
 
@@ -16,6 +16,8 @@ iPad 绘画 → 局域网上传画面和蒙版 → Windows ComfyUI 生成 → iP
 - `mock` 后端不需要显卡，返回明确标有 MOCK 的图像；`comfyui` 后端调用本机 ComfyUI。
 
 首个真实预设使用 FLUX.2 Klein 4B 的参考图编辑，再用原蒙版限定返回图层。**蒙版目前不参与模型的去噪过程，尚未实现模型原生局部重绘。** 因此绘画风格、局部边缘融合和满意度仍需要用户试画评估。
+
+Windows v0.2 增加共享预设目录、入队执行快照、依赖核验、队列预算与超时后的推理占用保护。Klein 保持默认；Qwen-Image-2.1 与 Turbo 是默认关闭的研究评估项。真实后端新增本机模型与 ComfyUI 安装目录配置，启动、Mac 选择器交接及升级回退见 [Windows 多预设增量说明](../docs/WINDOWS_PRESETS_V02.md)。多预设仍沿用单图、单蒙版、单结果的 API v1，不代表新模型已通过绘画质量验收。
 
 ## 开发顺序
 
@@ -52,10 +54,10 @@ Mac agent 从 [API v1](docs/API_V1.md)、[示例请求](examples/metadata.json) 
 连接已经启动的本机 ComfyUI，并允许局域网客户端连接的示例：
 
 ```powershell
-.\start-bridge.ps1 -Backend comfyui -ComfyUrl http://127.0.0.1:8188 -ListenAddress 0.0.0.0 -BaseUrl http://192.168.1.100:8190
+.\start-bridge.ps1 -Backend comfyui -ComfyUrl http://127.0.0.1:8188 -ComfyModelsDirectory D:/ExampleModels -ComfyInstallDirectory D:/ExampleComfyUI -ListenAddress 0.0.0.0 -BaseUrl http://192.168.1.100:8190
 ```
 
-`192.168.1.100` 仅为示例，请换成 Windows 当前局域网 IP。ComfyUI 本身保持监听 `127.0.0.1`；iPad 只访问桥接端口 8190。若 Windows 防火墙提示，按用户当前网络情况允许专用网络访问；本项目没有自动新增防火墙规则。
+地址和两个 `Example` 目录仅为示例，请换成本机实际值。ComfyUI 本身保持监听 `127.0.0.1`；iPad 只访问桥接端口 8190。若 Windows 防火墙提示，按用户当前网络情况允许专用网络访问；本项目没有自动新增防火墙规则。
 
 真实预设需要以下模型和 ComfyUI 内置节点，启动后访问受保护的 `/v1/backend/status` 检查具体缺项：
 

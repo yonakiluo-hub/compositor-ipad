@@ -1,6 +1,10 @@
 param(
     [ValidateSet('mock', 'comfyui')][string]$Backend = 'mock',
     [string]$ComfyUrl = 'http://127.0.0.1:8188',
+    [string]$ComfyModelsDirectory = '',
+    [string]$ComfyInstallDirectory = '',
+    [switch]$EnableExperimental,
+    [int]$MaxPendingJobs = 8,
     [string]$ListenAddress = '127.0.0.1',
     [int]$Port = 8190,
     [string]$BaseUrl = '',
@@ -23,6 +27,10 @@ try {
         $BaseUrl = '{0}://{1}:{2}' -f $scheme, $ListenAddress, $Port
     }
     $common = @('--data-dir', $DataDirectory, '--backend', $Backend, '--comfy-url', $ComfyUrl)
+    if ($ComfyModelsDirectory) { $common += @('--comfy-models-dir', $ComfyModelsDirectory) }
+    if ($ComfyInstallDirectory) { $common += @('--comfy-install-dir', $ComfyInstallDirectory) }
+    if ($EnableExperimental) { $common += '--enable-experimental' }
+    $common += @('--max-pending-jobs', [string]$MaxPendingJobs)
     & $python -m bridge pairing @common --base-url $BaseUrl
     if ($LASTEXITCODE -ne 0) { throw 'Pairing setup failed.' }
     $serveArgs = @('--host', $ListenAddress, '--port', [string]$Port)

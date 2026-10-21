@@ -4,7 +4,7 @@
 
 **最终目标是可日常使用的完整绘图与图像编辑软件。** 当前的“画布 → 蒙版 → AI → 新图层”闭环只是第一阶段；长期功能范围与验收见 [产品需求](docs/PRODUCT_REQUIREMENTS.md)。普通绘画、编辑、保存和导出应能在不连接 Windows 时独立使用。
 
-**当前已实现 Windows 桥接 v0.1 和首版原生 iPad 编辑器，完整产品范围仍在推进。** 这是用于 Mac 与 Windows 协作开发的主仓库。Git 同步源码、文档和测试，画稿、模型、运行数据库与配对凭据留在各自设备上。
+**当前已实现 Windows 桥接 v0.2 和首版原生 iPad 编辑器，完整产品范围仍在推进。** 这是用于 Mac 与 Windows 协作开发的主仓库。Git 同步源码、文档和测试，画稿、模型、运行数据库与配对凭据留在各自设备上。
 
 ```text
 iPad 本机绘画与图层
@@ -25,7 +25,9 @@ Windows Local Bridge → 本机 ComfyUI / NVIDIA GPU
 | Windows 启动服务，或 Mac 启动模拟后端 | [桥接安装与运行](ipad_bridge/README.md) |
 | 两端网络接口、坐标、蒙版、重试 | [API v1](ipad_bridge/docs/API_V1.md) |
 | 两台电脑同步代码 | [Git 协作流程](docs/GIT_WORKFLOW.md) |
-| 已验证内容与限制 | [Windows v0.1 状态](docs/WINDOWS_BRIDGE_STATUS.md) |
+| 本次 main 集成与 iOS 后续工作 | [2026-10-21 简短交接](docs/MAIN_INTEGRATION_IOS_20261021.md) |
+| 多模型预设、验证及 Mac 接入 | [Windows v0.2 状态与交接](docs/WINDOWS_PRESETS_V02.md) |
+| 历史验证记录 | [Windows v0.1 状态](docs/WINDOWS_BRIDGE_STATUS.md) |
 
 克隆本仓库：
 
@@ -56,10 +58,10 @@ python3 -m venv .venv
 
 ## 当前范围
 
-- iPad 已实现：离线分层绘画、Pencil 输入、选区与可绘制蒙版、剪贴蒙版、多层选择合并、图层组与混合、基础变换和调整、撤销重做、分层自动保存及图片导出；已接入 AI 候选与工程备份，并兼容 Windows 多模型预设扩展（服务实际开放哪些项以连接后的目录为准）。范围及真机验收状态见 [iPad 状态](docs/IPAD_STATUS.md)。
-- 桥接已实现：认证、任务持久化、重试与恢复、结果下载、蒙版透明度处理、`.comp` ZIP 版本备份，以及模拟后端和固定真实生成预设。
-- 验证：Windows 桥接的 62 项测试、81 个子测试在 Mac 通过；Mac 原生 Swift 客户端通过模拟后端和真实 Windows 合成输入闭环。iPad 真机验收单独记录。
-- 当前预设使用 FLUX.2 Klein 4B 参考图编辑，再将蒙版应用到输出 alpha；蒙版尚不参与模型去噪，边缘融合与实际绘画质量需评估。
+- iPad 已实现：离线分层绘画、Pencil 输入、套索与软选区、可绘制图层蒙版、剪贴蒙版、多层选择合并、图层组与混合、自由变换、画布旋转和基础调整、撤销重做、分层自动保存及图片导出；已接入 AI 候选、工程备份与模型组合选择。服务实际开放哪些项以连接后的目录为准，真机验收状态见 [iPad 状态](docs/IPAD_STATUS.md)。
+- 桥接已实现：认证、任务持久化、重试与恢复、结果下载、蒙版透明度处理、`.comp` ZIP 版本备份，以及多预设目录、入队冻结、依赖核验和显卡占用保护。Klein 默认开启，Qwen 2.1 与 Turbo 为研究评估用实验预设。
+- 本次 Windows 集成验证：后端加启动器共 223 项测试、214 个子测试通过；此前独立 RTX 5080 环境中三组预设共 144 项 GPU 测试及最终代码 3 项复测成功。绘画质量与本次合并后的 iPad 真机联调仍待验收，详见 [集成交接](docs/MAIN_INTEGRATION_IOS_20261021.md)与 [v0.2 验证记录](docs/WINDOWS_PRESETS_V02.md#本次验证记录)。
+- 默认使用 FLUX.2 Klein 4B；Qwen 2.1 与 Turbo 默认关闭。当前各预设均做参考图编辑，再将蒙版应用到输出 alpha；蒙版尚不参与模型去噪，边缘融合与实际绘画质量需评估。
 - 暂不包含完整 Windows 画图软件、Procreate 实时插件、逐笔同步或云端账户服务。
 
 ## 目录

@@ -15,12 +15,27 @@ class Settings:
     job_timeout_seconds: float = 3600
     recovery_seconds: float = 90
     start_worker: bool = True
+    preset_dir: Path | None = None
+    enable_experimental: bool = False
+    comfy_models_dir: Path | None = None
+    comfy_install_dir: Path | None = None
+    max_pending_jobs: int = 8
+    max_pending_bytes: int = 256 * 1024 * 1024
 
     def __post_init__(self):
         self.data_dir = Path(self.data_dir).resolve()
         if self.backend not in {"mock", "comfyui"}:
             raise ValueError("backend must be mock or comfyui")
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.preset_dir = Path(self.preset_dir or Path(__file__).parent / "presets").resolve()
+        for name in ("comfy_models_dir", "comfy_install_dir"):
+            value = getattr(self, name)
+            if value is not None:
+                setattr(self, name, Path(value).resolve())
+        if type(self.max_pending_jobs) is not int or self.max_pending_jobs < 1:
+            raise ValueError("max_pending_jobs must be a positive integer")
+        if type(self.max_pending_bytes) is not int or self.max_pending_bytes < 1:
+            raise ValueError("max_pending_bytes must be a positive integer")
 
     @property
     def preset_id(self) -> str:

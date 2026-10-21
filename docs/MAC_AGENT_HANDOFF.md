@@ -2,6 +2,8 @@
 
 交接日期：2026 年 10 月 19 日，Asia/Shanghai。
 
+> 2026-10-21 的 main 集成请先读[简短 iOS 交接](MAIN_INTEGRATION_IOS_20261021.md)：已包含剪贴蒙版与模型选择界面，跨端真机验证留待 iPad 在身边后完成。
+
 > 后续进展：本仓库现已新增可构建的原生 iPad 工程及基础编辑器。最新完成范围、构建命令、验证与限制以 [iPad 状态](IPAD_STATUS.md) 和 [客户端 README](../ipad_app/README.md) 为准。下文“尚未创建 iPad target”等内容是接手前的历史基线，不代表当前代码。
 
 接收方：在 Mac 上工作的开发 agent。开发环境由 Mac、iPad，以及运行 ComfyUI 的 Windows／NVIDIA 电脑组成。

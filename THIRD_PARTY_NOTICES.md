@@ -12,6 +12,15 @@
 
 This notice covers that adapted preset; it does not assign a license to the rest of this repository.
 
+`ipad_bridge/bridge/presets/qwen21-edit-v1.json` and `qwen21-turbo-edit-v1.json` also adapt Comfy Org's MIT workflow templates, pinned at commit `d0e41fe5423f93db5b5872cf273d7b1af8aa68bc`:
+
+- [Qwen-Image-2.1 image-edit template](https://github.com/Comfy-Org/workflow_templates/blob/d0e41fe5423f93db5b5872cf273d7b1af8aa68bc/templates/image_qwen_image_2_1_image_edit.json)
+- [Qwen-Image-2.1 Turbo image-edit template](https://github.com/Comfy-Org/workflow_templates/blob/d0e41fe5423f93db5b5872cf273d7b1af8aa68bc/templates/image_qwen_image_2_1_turbo_image_edit.json)
+
+The API adaptations retain a single reference, preserve source alpha, restore the submitted crop dimensions and leave the selection mask to bridge output compositing. The Turbo preset uses the base model with the official Turbo LoRA combination documented by [Comfy-Org/Qwen-Image-2.1](https://huggingface.co/Comfy-Org/Qwen-Image-2.1). Copyright (c) 2023-present Comfy Org; the same preserved [MIT license](licenses/ComfyUI-Workflow-Templates-MIT.txt) applies to these template adaptations. See [the experiment record](docs/QWEN_EXPERIMENT.md).
+
+The Qwen-Image-2.1 and Turbo model weights have separate research/evaluation restrictions; commercial use requires a separate license. These workflow notices do not grant model-use rights. [Base model license](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE), [Turbo model license](https://huggingface.co/Qwen/Qwen-Image-2.1-Turbo/blob/main/LICENSE). Model weights are not distributed here.
+
 ## External applications and models
 
 ComfyUI runs as a separately installed application. Python dependencies are installed from the requirements files and retain their respective licenses. Neither ComfyUI application code nor model weights are distributed in this repository.

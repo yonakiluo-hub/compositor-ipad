@@ -58,7 +58,7 @@ def _identifier(value: Any, name: str) -> str:
     return value
 
 
-def validate_metadata(value: dict) -> dict:
+def validate_metadata(value: dict, allowed_presets=WORKFLOW_PRESETS) -> dict:
     """Validate the complete v1 metadata and return an independent copy.
 
     The first version accepts exactly the documented fields, safe ASCII IDs,
@@ -100,7 +100,8 @@ def validate_metadata(value: dict) -> dict:
         raise ValueError("colorSpace must be sRGB")
     if value["maskConvention"] != "white_edit_black_preserve":
         raise ValueError("maskConvention must be white_edit_black_preserve")
-    if not isinstance(value["workflowPreset"], str) or value["workflowPreset"] not in WORKFLOW_PRESETS:
+    _identifier(value["workflowPreset"], "workflowPreset")
+    if allowed_presets is not None and value["workflowPreset"] not in allowed_presets:
         raise ValueError("workflowPreset is unsupported")
     if not isinstance(value["prompt"], str) or len(value["prompt"]) > 4000:
         raise ValueError("prompt must be a string of at most 4000 characters")
@@ -248,7 +249,7 @@ def _mask(data: bytes, size: tuple[int, int]) -> Image.Image:
 
 def normalize_inputs(image_bytes: bytes, mask_bytes: bytes, metadata: dict) -> tuple[bytes, bytes]:
     """Return an 8-bit straight-alpha sRGB RGBA PNG and exact L coverage PNG."""
-    checked = validate_metadata(metadata)
+    checked = validate_metadata(metadata, allowed_presets=None)
     size = (checked["inputSize"]["width"], checked["inputSize"]["height"])
     image = _decode(image_bytes, kind="image", png_only=True, max_pixels=MAX_INPUT_PIXELS, expected_size=size)
     mask = _mask(mask_bytes, size)
@@ -262,7 +263,7 @@ def make_result(generated: bytes, mask: bytes, metadata: dict) -> bytes:
     pixels have exactly zero alpha, preserving the original when composited.
     Gray coverage multiplies any existing alpha using Pillow's integer floor.
     """
-    checked = validate_metadata(metadata)
+    checked = validate_metadata(metadata, allowed_presets=None)
     size = (checked["cropRect"]["width"], checked["cropRect"]["height"])
     coverage = _mask(mask, size)
     decoded = _decode(
