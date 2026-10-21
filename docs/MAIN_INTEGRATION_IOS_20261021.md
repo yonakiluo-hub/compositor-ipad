@@ -26,6 +26,7 @@ PR10 已有“模型与生成组合”选择器：读取目录、显示默认/�
 
 - Windows 后端与启动器的合并候选树：**223 项测试、214 个子测试通过，0 跳过**。预先测试的后端目录树为 `32a51f67f8a5a00341bbebbf0f2d8be86cb4ac34`。
 - iPad 原实现 `c1d5d436e499decfd3204265ec2c3911e944b66d` 的 [GitHub CI](https://github.com/yonakiluo-hub/compositor-ipad/actions/runs/39557826003) 已成功；本次集成保留该提交的 iPad 源码与 CI 配置，未在 Windows 冒充重跑 Xcode 或真机。
+- 集成提交 `8819fb7` 的 [GitHub CI 第二次完整运行](https://github.com/yonakiluo-hub/compositor-ipad/actions/runs/39561356185/attempts/2) 通过：Swift 汇总 146 项（3 项跳过、0 失败），原生单测 87 项、界面测试 8 项均通过。首次运行有 1 项界面测试在初始“文件菜单”可交互等待处超时；未修改源码、断言或超时设置，原提交完整重跑通过，首次超时根因仍未确认。此后仅补文档，不等同于真机验收。
 - 此前三模型 144 项 GPU 测试及最终代码 3 项复测通过，证据见 [v0.2 记录](WINDOWS_PRESETS_V02.md#本次验证记录)。本次合并没有修改推理代码或重新做 GPU 质量验收。
 - **源码合并不等于日常服务升级。** 本次交接时原 Windows 日常服务仍报告 v0.1.0。真机联调前由 Windows 端按升级文档排空任务、备份并部署 v0.2，保留原配对；iPad 读取实际服务目录，不硬编码开启实验项。
 
