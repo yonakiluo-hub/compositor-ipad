@@ -135,6 +135,7 @@ public struct CanvasDocument: Equatable, Identifiable, Sendable {
         guard appliedAIResults.count <= 100_000,
               appliedAIResults.allSatisfy({ !$0.jobID.isEmpty && !$0.resultID.isEmpty && $0.jobID.utf8.count <= 512 && $0.resultID.utf8.count <= 512 })
         else { throw DocumentError.invalid("候选应用记录无效") }
+        try GroupMaskRules.validate(layers, bounds: CGRect(origin: .zero, size: size))
     }
 }
 

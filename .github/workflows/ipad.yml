@@ -23,3 +23,11 @@ jobs:
         env:
           COMPOSITOR_BUILD_DIR: ${{ runner.temp }}/ipad-verify
         run: bash ipad_app/tools/verify_ipad.sh
+      - name: Preserve simulator failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ipad-test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ipad-verify/TestResults
+          if-no-files-found: ignore
+          retention-days: 7

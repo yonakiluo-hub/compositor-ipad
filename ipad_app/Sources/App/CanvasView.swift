@@ -257,7 +257,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
                                             settings: model.brushSettings, selection: nil, maskMode: true)
             } else {
                 guard model.selectedLayerIDs.count <= 1 else { throw DocumentError.invalid("请先选择一个图层，再绘画或移动") }
-                guard let layer = model.activeLayer, !layer.isGroup else { throw DocumentError.invalid("请选择一个普通图层") }
+                guard let layer = model.activeLayer,
+                      !layer.isGroup || (model.layerEditTarget == .mask && [.brush, .eraser].contains(gestureTool))
+                else { throw DocumentError.invalid("请选择普通图层，或切换到组蒙版绘画") }
                 guard !model.document.isEffectivelyLocked(layer.id) else { throw DocumentError.lockedLayer }
                 strokeLayer = layer
                 if gestureTool == .move { return }

@@ -265,12 +265,14 @@ final class EditorModel: ObservableObject {
         }
     }
     func selectionToLayerMask() {
-        guard let layer = activeLayer, !layer.isGroup, selectedLayerIDs.count <= 1 else { return }
+        guard var layer = activeLayer, selectedLayerIDs.count <= 1 else { return }
         report {
+            if layer.isGroup && layer.maskPNGData == nil { layer.transform = LayerTransform(size: document.size, sampling: .nearest) }
             let full = try selectionPreview ?? RasterImage.solidMask(width: document.width, height: document.height, white: true)
-            guard let mask = try renderer.localSelection(full, layer: layer, document: document) else { return }
+            let size = try renderer.pixelSize(of: layer)
+            guard let mask = try PadMaskRaster.selection(full, layer: layer, size: size, document: document, renderer: renderer) else { return }
             let data = try RasterImage.png(mask)
-            updateLayer("选区转图层蒙版") { $0.maskPNGData = data; $0.maskEnabled = true }
+            updateLayer("选区转图层蒙版") { $0.transform = layer.transform; $0.maskPNGData = data; $0.maskEnabled = true }
         }
     }
     func fill() {

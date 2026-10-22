@@ -292,7 +292,7 @@ struct EditorView: View {
                             if layer.maskSourceID != nil { Image(systemName: "arrow.turn.down.right").accessibilityLabel("剪贴图层") }
                             Text(layer.name).lineLimit(1)
                         }.foregroundStyle(.primary)
-                        Text(layer.isGroup ? "穿透组" : "\(Int(layer.opacity * 100))% · \(layer.blendMode.rawValue)\(layer.maskPNGData == nil ? "" : " · 蒙版")").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text(layer.isGroup ? "穿透组" + (layer.maskPNGData == nil ? "" : " · 组蒙版") : "\(Int(layer.opacity * 100))% · \(layer.blendMode.rawValue)\(layer.maskPNGData == nil ? "" : " · 蒙版")").font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                     if layer.isLocked { Image(systemName: "lock.fill").font(.caption) }
@@ -341,32 +341,9 @@ struct EditorView: View {
                 }
                 HStack {
                     Button("缩小") { scaleLayer(0.9) }; Button("放大") { scaleLayer(1.1) }
-                    Menu("蒙版") {
-                        Button("添加白色蒙版") { model.addLayerMask() }.disabled(layer.maskPNGData != nil)
-                        Button("使用当前选区") { model.selectionToLayerMask() }
-                        Button("编辑蒙版") { model.setLayerEditTarget(.mask) }.disabled(layer.maskPNGData == nil)
-                        Button("从蒙版载入选区") { model.layerMaskToSelection() }.disabled(layer.maskPNGData == nil)
-                        Button("反相蒙版") { model.invertLayerMask() }.disabled(layer.maskPNGData == nil)
-                        Button(layer.maskEnabled ? "停用蒙版" : "启用蒙版") { model.setLayerMaskEnabled(!layer.maskEnabled) }.disabled(layer.maskPNGData == nil)
-                        Button("移除蒙版") { model.removeLayerMask() }.disabled(layer.maskPNGData == nil)
-                    }.accessibilityIdentifier("mask.menu")
-                }
-                if layer.maskPNGData == nil {
-                    Button("添加图层蒙版") { model.addLayerMask() }.accessibilityIdentifier("mask.add")
-                } else {
-                    Picker("编辑对象", selection: Binding(get: { model.layerEditTarget == .mask }, set: { model.setLayerEditTarget($0 ? .mask : .pixels) })) {
-                        Text("图像").tag(false); Text("蒙版").tag(true)
-                    }.pickerStyle(.segmented).accessibilityIdentifier("layer.editTarget")
-                    if model.layerEditTarget == .mask {
-                        Text("黑色隐藏，白色恢复原图；选区会限制修改范围。").foregroundStyle(.secondary)
-                        HStack {
-                            Button("填黑") { model.fillLayerMask(reveal: false) }.accessibilityIdentifier("mask.fillBlack")
-                            Button("填白") { model.fillLayerMask(reveal: true) }.accessibilityIdentifier("mask.fillWhite")
-                            Button("反相") { model.invertLayerMask() }.accessibilityIdentifier("mask.invert")
-                        }
-                    }
                 }
             }
+            maskControls(layer)
             HStack {
                 if layer.isGroup {
                     Button("合并组") { model.mergeSelectedLayers() }.disabled(mergeIssue(model.selectedMergePlan) != nil)
@@ -390,6 +367,38 @@ struct EditorView: View {
                 Button(role: .destructive) { model.deleteLayer() } label: { Image(systemName: "trash") }.accessibilityLabel("删除图层")
             }.frame(maxWidth: .infinity)
         }.font(.caption).padding(16)
+    }
+    private func maskControls(_ layer: RasterLayer) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Menu(layer.isGroup ? "组蒙版" : "蒙版") {
+                Button("添加白色蒙版") { model.addLayerMask() }.disabled(layer.maskPNGData != nil)
+                Button("使用当前选区") { model.selectionToLayerMask() }
+                Button("编辑蒙版") { model.setLayerEditTarget(.mask) }.disabled(layer.maskPNGData == nil)
+                Button("从蒙版载入选区") { model.layerMaskToSelection() }.disabled(layer.maskPNGData == nil)
+                Button("反相蒙版") { model.invertLayerMask() }.disabled(layer.maskPNGData == nil)
+                Button(layer.maskEnabled ? "停用蒙版" : "启用蒙版") { model.setLayerMaskEnabled(!layer.maskEnabled) }.disabled(layer.maskPNGData == nil)
+                Button("移除蒙版") { model.removeLayerMask() }.disabled(layer.maskPNGData == nil)
+            }.accessibilityIdentifier("mask.menu")
+            if layer.maskPNGData == nil {
+                Button(layer.isGroup ? "添加组蒙版" : "添加图层蒙版") { model.addLayerMask() }.accessibilityIdentifier("mask.add")
+            } else {
+                Picker("编辑对象", selection: Binding(get: { model.layerEditTarget == .mask }, set: { model.setLayerEditTarget($0 ? .mask : .pixels) })) {
+                    Text(layer.isGroup ? "图层组" : "图像").tag(false); Text("蒙版").tag(true)
+                }.pickerStyle(.segmented).accessibilityIdentifier("layer.editTarget")
+                if layer.isGroup {
+                    Text("组蒙版对整组绘制结果覆盖一次；组透明度仍沿用穿透规则。")
+                        .foregroundStyle(.secondary).accessibilityIdentifier("mask.groupNotice")
+                }
+                if model.layerEditTarget == .mask {
+                    Text("黑色隐藏，白色恢复原图；选区会限制修改范围。").foregroundStyle(.secondary)
+                    HStack {
+                        Button("填黑") { model.fillLayerMask(reveal: false) }.accessibilityIdentifier("mask.fillBlack")
+                        Button("填白") { model.fillLayerMask(reveal: true) }.accessibilityIdentifier("mask.fillWhite")
+                        Button("反相") { model.invertLayerMask() }.accessibilityIdentifier("mask.invert")
+                    }
+                }
+            }
+        }
     }
     private var multiLayerControls: some View {
         VStack(alignment: .leading, spacing: 10) {
