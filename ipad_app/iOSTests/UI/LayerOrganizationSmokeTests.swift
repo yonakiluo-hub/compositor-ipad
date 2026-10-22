@@ -74,7 +74,25 @@ final class LayerOrganizationSmokeTests: XCTestCase {
         app.buttons["layer.add"].tap(); app.buttons["editor.undo"].tap()
         XCTAssertTrue(app.buttons["editor.redo"].isEnabled)
         XCUIDevice.shared.orientation = .portrait
-        app.buttons["layers.organize"].tap()
+        let organizer = app.buttons["layers.organize"]
+        // Rotation can finish before accessibility has the button's new frame.
+        // Wait for a portrait, in-window target that stays put across snapshots;
+        // tap once, then retain the original presentation/history assertions.
+        var previousFrame = CGRect.null
+        var stableSnapshots = 0
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            let window = app.frame, frame = organizer.frame
+            guard window.height > window.width, organizer.isHittable,
+                  !frame.isEmpty, window.contains(frame) else {
+                previousFrame = .null; stableSnapshots = 0
+                return false
+            }
+            stableSnapshots = frame == previousFrame ? stableSnapshots + 1 : 0
+            previousFrame = frame
+            return stableSnapshots >= 2
+        }, object: organizer)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed)
+        organizer.tap()
         XCTAssertTrue(app.buttons["organization.apply"].waitForExistence(timeout: 5))
         snapshot(app, "组整理-竖屏移动")
         app.buttons["organization.cancel"].tap()

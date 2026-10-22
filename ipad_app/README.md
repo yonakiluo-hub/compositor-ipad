@@ -34,6 +34,8 @@ bash ipad_app/tools/verify_ipad.sh
 
 工程文件已纳入版本控制。添加或删除源文件后，用 `python3 ipad_app/tools/generate_project.py` 更新工程，再编译。核心 Swift Package 名称为 `CompositorKit`；不依赖外部 Swift 包。模拟器使用本地 ad-hoc 签名以保留 Keychain entitlement；完全关闭签名的应用可能无法访问钥匙串。验证脚本使用 Xcode 支持的 `test-without-building`，也适用于 SDK 与已安装模拟器运行时版本不同、scheme 自动目标解析失败的环境。
 
+每次脚本验证会在构建目录的 `TestResults/run.*/Tests.xcresult` 保留独立结果包，重跑不会覆盖上一次诊断。GitHub 原生测试失败时上传该目录为 `ipad-test-results-<run-id>-<attempt>`，保留 7 天；可下载后在 Xcode 中检查截图、界面层级和失败活动。CI 仅使用隔离模拟器及合成画稿。
+
 ## 使用
 
 - 文件菜单可新建画稿、打开 `.comp`、导入图片为图层、保存与分享分层工程，或导出 PNG/JPEG。JPEG 导出使用白底。

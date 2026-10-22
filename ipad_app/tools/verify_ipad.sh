@@ -14,7 +14,10 @@ xcodebuild -project "$project_dir/CompositorPad.xcodeproj" \
   CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- build
 # Fresh CI simulators must finish booting before XCTest launches the app.
 xcrun simctl bootstatus "$simulator_id" -b
+mkdir -p "$build_dir/TestResults"
+result_directory="$(mktemp -d "$build_dir/TestResults/run.XXXXXX")"
 xcodebuild test-without-building \
   -xctestrun "$build_dir/Build/Products/CompositorPad.xctestrun" \
   -destination "platform=iOS Simulator,id=$simulator_id" \
+  -resultBundlePath "$result_directory/Tests.xcresult" \
   -parallel-testing-enabled NO
