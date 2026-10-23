@@ -79,6 +79,8 @@ extension EditorModel {
     }
 
     func cancelColorAdjustment() {
+        guard colorAdjustmentSession != nil || colorAdjustmentPreview != nil || colorAdjustmentPreviewPending
+                || colorAdjustmentPreviewError != nil else { return }
         colorAdjustmentSession = nil; colorAdjustmentPreview = nil
         colorAdjustmentPreviewPending = false; colorAdjustmentPreviewError = nil
         // Keep the worker until it actually exits to bound concurrent allocations.

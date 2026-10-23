@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import Combine
 @testable import CompositorPad
 
 final class ColorAdjustmentWorkflowTests: XCTestCase {
@@ -143,5 +144,16 @@ final class ColorAdjustmentWorkflowTests: XCTestCase {
         m.toggleLock(try XCTUnwrap(m.activeLayer?.id)); m.addLayer(); m.setLayerMultiSelecting(true); m.toggleLayerSelection(m.document.layers[0].id)
         let before = m.document
         XCTAssertFalse(m.beginColorAdjustment(.curves)); XCTAssertEqual(m.document,before)
+    }
+
+    @MainActor func testInactiveAdjustmentCancellationDoesNotPublishUnrelatedUIChanges() throws {
+        let m = try fixture(), before = m.document
+        var updates = 0
+        let observation = m.objectWillChange.sink { updates += 1 }
+        m.cancelColorAdjustment(); m.cancelColorAdjustment()
+        XCTAssertEqual(updates,0,"An unopened adjustment editor must not invalidate unrelated tool/layout snapshots")
+        XCTAssertEqual(m.document,before)
+        withExtendedLifetime(observation) {}
+        XCTAssertTrue(m.beginTransform()); XCTAssertNotNil(m.transformSession)
     }
 }

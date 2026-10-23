@@ -291,7 +291,8 @@ final class EditorModel: ObservableObject {
             errorMessage = "请先选择一个图层，再填充。"
             return
         }
-        guard let layer = activeLayer, !layer.isGroup, layer.adjustment == nil else {
+        guard let layer = activeLayer, !layer.isGroup else { return }
+        guard layer.adjustment == nil else {
             errorMessage = "调整层请编辑参数，或切换到蒙版绘画。"; return
         }
         report {

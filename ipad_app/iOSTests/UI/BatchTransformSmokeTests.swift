@@ -19,7 +19,7 @@ final class BatchTransformSmokeTests: XCTestCase {
     func testCommonResizeRotateMoveFlipsOneUndoAndReopen() throws {
         let app = try launchTwoLayers(), canvas = app.otherElements["editor.canvas"]
         app.buttons["layers.transform"].tap()
-        let geometry = app.staticTexts["transform.geometry"]
+        var geometry: XCUIElement { app.staticTexts["transform.geometry"] }
         XCTAssertTrue(geometry.waitForExistence(timeout:5)); let original = geometry.label
         XCTAssertTrue(app.staticTexts["transform.scope"].label.contains("共同变换"))
         app.buttons["适合画布"].tap()
@@ -49,7 +49,7 @@ final class BatchTransformSmokeTests: XCTestCase {
         // A newly opened common box is upright. Inspect one carried layer to
         // verify its persisted size/angle rather than expecting a saved draft box.
         app.buttons["layers.multiselect"].tap()
-        let tool = app.buttons["tool.自由变换"]
+        var tool: XCUIElement { app.scrollViews["editor.tools"].buttons["tool.自由变换"] }
         reveal(tool,in:app.scrollViews["editor.tools"],up:false); tool.tap()
         XCTAssertTrue(geometry.waitForExistence(timeout:5)); XCTAssertEqual(geometry.label,committed)
         app.buttons["transform.cancel"].tap()
@@ -65,7 +65,7 @@ final class BatchTransformSmokeTests: XCTestCase {
         let reopened = XCUIApplication(); reopened.launch()
         XCTAssertTrue(reopened.otherElements["editor.canvas"].waitForExistence(timeout:10))
         XCTAssertEqual(reopened.staticTexts["layers.count"].label,"2 个图层")
-        let reopenedTool = reopened.buttons["tool.自由变换"], reopenedGeometry = reopened.staticTexts["transform.geometry"]
+        let reopenedTool = reopened.scrollViews["editor.tools"].buttons["tool.自由变换"], reopenedGeometry = reopened.staticTexts["transform.geometry"]
         reveal(reopenedTool,in:reopened.scrollViews["editor.tools"],up:false); reopenedTool.tap()
         XCTAssertTrue(reopenedGeometry.waitForExistence(timeout:5)); XCTAssertEqual(reopenedGeometry.label,committed)
         XCTAssertFalse(reopened.alerts["操作未完成"].exists); snapshot("多层-分层重开")
@@ -85,9 +85,9 @@ final class BatchTransformSmokeTests: XCTestCase {
         let frame = canvas.frame
         drag(canvas,from:CGPoint(x:frame.midX-25,y:frame.midY),to:CGPoint(x:frame.midX+35,y:frame.midY+10))
         app.buttons["mask.exit"].tap()
-        let tool = app.buttons["tool.自由变换"]
+        var tool: XCUIElement { app.scrollViews["editor.tools"].buttons["tool.自由变换"] }
         reveal(tool,in:app.scrollViews["editor.tools"],up:false); tool.tap()
-        let geometry = app.staticTexts["transform.geometry"]
+        var geometry: XCUIElement { app.staticTexts["transform.geometry"] }
         XCTAssertTrue(geometry.waitForExistence(timeout:5))
         XCTAssertTrue(app.staticTexts["transform.scope"].label.contains("组内子层"))
         let groupFrame = canvas.frame
@@ -106,7 +106,7 @@ final class BatchTransformSmokeTests: XCTestCase {
         let reopened = XCUIApplication(); reopened.launch()
         XCTAssertTrue(reopened.otherElements["editor.canvas"].waitForExistence(timeout:10))
         XCTAssertTrue(reopened.buttons["layer.mask.图层组"].exists); XCTAssertEqual(reopened.staticTexts["layers.count"].label,"3 个图层")
-        let reopenedTool = reopened.buttons["tool.自由变换"], reopenedGeometry = reopened.staticTexts["transform.geometry"]
+        let reopenedTool = reopened.scrollViews["editor.tools"].buttons["tool.自由变换"], reopenedGeometry = reopened.staticTexts["transform.geometry"]
         reveal(reopenedTool,in:reopened.scrollViews["editor.tools"],up:false); reopenedTool.tap()
         XCTAssertTrue(reopenedGeometry.waitForExistence(timeout:5)); XCTAssertTrue(reopened.staticTexts["transform.scope"].label.contains("组内子层"))
         XCTAssertFalse(reopened.alerts["操作未完成"].exists); snapshot("整组-蒙版与子层重开")
@@ -115,8 +115,28 @@ final class BatchTransformSmokeTests: XCTestCase {
 
     private func reveal(_ button: XCUIElement,in scroll: XCUIElement,up: Bool) {
         XCTAssertTrue(button.waitForExistence(timeout:5))
-        for _ in 0..<4 where !button.isHittable { if up { scroll.swipeUp() } else { scroll.swipeDown() } }
-        XCTAssertTrue(button.isHittable)
+        func finite(_ frame: CGRect) -> Bool {
+            !frame.isEmpty && [frame.minX,frame.minY,frame.width,frame.height].allSatisfy(\.isFinite)
+        }
+        let containerReady = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in finite(scroll.frame) },object:scroll)
+        XCTAssertEqual(XCTWaiter.wait(for:[containerReady],timeout:10),.completed)
+        // Being in the viewport is separate from a transient AX hittable result.
+        // Scroll only to reveal an offscreen target, then wait for layout to settle.
+        for _ in 0..<4 {
+            if finite(button.frame), scroll.frame.contains(button.frame) { break }
+            if up { scroll.swipeUp() } else { scroll.swipeDown() }
+        }
+        var previous = CGRect.null, stableSnapshots = 0
+        let settled = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
+            let frame = button.frame
+            guard finite(frame), scroll.frame.contains(frame), button.isHittable else {
+                previous = .null; stableSnapshots = 0; return false
+            }
+            stableSnapshots = frame == previous ? stableSnapshots + 1 : 0
+            previous = frame
+            return stableSnapshots >= 2
+        },object:button)
+        XCTAssertEqual(XCTWaiter.wait(for:[settled],timeout:10),.completed)
     }
     private func expect(_ predicate: NSPredicate,on element: XCUIElement) {
         XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:predicate,object:element)],timeout:5),.completed)
