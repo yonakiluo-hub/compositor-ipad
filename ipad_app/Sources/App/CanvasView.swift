@@ -160,7 +160,8 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
                 context.fill(CGRect(x: canvas.minX + CGFloat(x) * tile, y: canvas.minY + CGFloat(y) * tile, width: tile, height: tile))
             } }
         }
-        var image = model.preview
+        var image = model.colorAdjustmentSession.map { model.colorAdjustmentIsCurrent($0) } == true
+            ? (model.colorAdjustmentPreview ?? model.preview) : model.preview
         if let session = model.transformSession {
             if let replacement = model.transformPreviewReplacement {
                 image = try? model.renderer.render(model.transformPreviewDocument, replacing: session.layerID,
@@ -258,7 +259,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             } else {
                 guard model.selectedLayerIDs.count <= 1 else { throw DocumentError.invalid("请先选择一个图层，再绘画或移动") }
                 guard let layer = model.activeLayer,
-                      !layer.isGroup || (model.layerEditTarget == .mask && [.brush, .eraser].contains(gestureTool))
+                      (!layer.isGroup && layer.adjustment == nil) || (model.layerEditTarget == .mask && [.brush, .eraser].contains(gestureTool))
                 else { throw DocumentError.invalid("请选择普通图层，或切换到组蒙版绘画") }
                 guard !model.document.isEffectivelyLocked(layer.id) else { throw DocumentError.lockedLayer }
                 strokeLayer = layer

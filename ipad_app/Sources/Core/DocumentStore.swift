@@ -39,6 +39,7 @@ public enum DocumentStore {
         var maskFile: String?
         var maskEnabled: Bool?
         var maskSourceID: UUID?
+        var adjustment: LayerAdjustment?
     }
 
     private struct IPadState: Codable {
@@ -52,6 +53,7 @@ public enum DocumentStore {
         let appliedAIResults: Set<AIResultKey>
         let selectionFile: String?
         let groupMaskCompositing: String?
+        let adjustmentCompositing: String?
     }
 
     public static func save(_ document: CanvasDocument, to url: URL) throws {
@@ -73,7 +75,7 @@ public enum DocumentStore {
                                transform: layer.transform, imageFile: imageFile, parentID: layer.parentID,
                                isGroup: layer.isGroup ? true : nil, opacity: layer.opacity, blendMode: layer.blendMode,
                                maskFile: maskFile, maskEnabled: maskFile == nil ? nil : layer.maskEnabled,
-                               maskSourceID: layer.maskSourceID)
+                               maskSourceID: layer.maskSourceID, adjustment: layer.adjustment)
         }
         let manifest = Manifest(resolution: document.resolution, documentID: document.id, width: document.width,
                                 height: document.height, activeLayerID: document.activeLayerID, layers: records)
@@ -85,7 +87,8 @@ public enum DocumentStore {
                               revision: document.revision, lockedLayerIDs: Set(document.layers.filter(\.isLocked).map(\.id)),
                               appliedAIResults: document.appliedAIResults,
                               selectionFile: document.selectionMaskPNGData == nil ? nil : "selection.png",
-                              groupMaskCompositing: document.layers.contains { $0.isGroup && $0.maskPNGData != nil } ? GroupMaskRules.semantics : nil)
+                              groupMaskCompositing: document.layers.contains { $0.isGroup && $0.maskPNGData != nil } ? GroupMaskRules.semantics : nil,
+                              adjustmentCompositing: document.layers.contains { $0.adjustment != nil } ? "pass-through-lut-v1" : nil)
         let stateBytes = try encoder.encode(state)
         guard stateBytes.count <= manifestLimit else { throw DocumentError.tooLarge }
         var files = ["manifest.json": FileWrapper(regularFileWithContents: metadata),
@@ -159,6 +162,7 @@ public enum DocumentStore {
             guard let state, state.format == "com.compositor.ipad-state", state.version == 1,
                   state.documentID == manifest.documentID, state.manifestSHA256 == digest(metadata),
                   state.groupMaskCompositing == nil || state.groupMaskCompositing == GroupMaskRules.semantics,
+                  state.adjustmentCompositing == nil || state.adjustmentCompositing == "pass-through-lut-v1",
                   state.selectionFile == nil || state.selectionFile == "selection.png"
             else { throw DocumentError.invalid("iPad 编辑状态与工程清单不一致") }
             guard state.lockedLayerIDs.isSubset(of: Set(manifest.layers.map(\.id))) else { throw DocumentError.invalid("锁定图层引用无效") }
@@ -195,10 +199,13 @@ public enum DocumentStore {
                                opacity: record.opacity ?? 1, blendMode: record.blendMode ?? .normal,
                                parentID: record.parentID, isGroup: record.isGroup ?? false,
                                maskPNGData: try asset(record.maskFile, layerID: record.id, mask: true), maskEnabled: record.maskEnabled ?? true,
-                               maskSourceID: record.maskSourceID)
+                               maskSourceID: record.maskSourceID, adjustment: record.adjustment)
         }
         if layers.contains(where: { $0.isGroup && $0.maskPNGData != nil }), state?.groupMaskCompositing != GroupMaskRules.semantics {
             throw DocumentError.unsupported("组蒙版合成语义缺失或不兼容；请保留原 iPad 工程状态")
+        }
+        if layers.contains(where: { $0.adjustment != nil }), state?.adjustmentCompositing != "pass-through-lut-v1" {
+            throw DocumentError.unsupported("调整层合成语义缺失或不兼容；请保留原 iPad 工程状态")
         }
         var selection: Data?
         if let selectionFile = state?.selectionFile {
@@ -233,8 +240,11 @@ public enum DocumentStore {
         let transformKeys: Set<String> = ["origin", "size", "rotation", "flipX", "flipY", "sampling"]
         for layer in layers {
             guard Set(layer.keys).isSubset(of: layerKeys) else { throw DocumentError.unsupported("未知图层字段") }
-            for field in ["adjustment", "maskPlacement", "shape", "effects", "text"] {
+            for field in ["maskPlacement", "shape", "effects", "text"] {
                 if let value = layer[field], !(value is NSNull) { throw DocumentError.unsupported(field) }
+            }
+            if let adjustment = layer["adjustment"], !(adjustment is NSNull) {
+                try checkAdjustmentJSON(adjustment)
             }
             if let linked = layer["maskLinked"], !(linked is NSNull) {
                 guard linked as? Bool == true, layer["maskFile"] as? String != nil else { throw DocumentError.unsupported("未链接蒙版") }
@@ -242,6 +252,29 @@ public enum DocumentStore {
             if let mode = layer["blendMode"] as? String, LayerBlendMode(rawValue: mode) == nil { throw DocumentError.unsupported("混合模式 \(mode)") }
             if let transform = layer["transform"] as? [String: Any], !Set(transform.keys).isSubset(of: transformKeys) {
                 throw DocumentError.unsupported("未知变换字段")
+            }
+        }
+    }
+
+    /// Every nested field must be recognized before JSONDecoder can ignore it.
+    private static func checkAdjustmentJSON(_ value: Any) throws {
+        func object(_ value: Any, keys: Set<String>) throws -> [String: Any] {
+            guard let object = value as? [String: Any], Set(object.keys).isSubset(of: keys)
+            else { throw DocumentError.unsupported("未知调整层字段") }
+            return object
+        }
+        let a = try object(value, keys: ["kind", "levels", "curves", "hue", "saturation", "lightness", "colorize"])
+        if let v = a["levels"], !(v is NSNull) {
+            let settings = try object(v, keys: ["channel", "ranges"])
+            guard let ranges = settings["ranges"] as? [Any], ranges.count == 4 else { throw DocumentError.invalid("色阶通道无效") }
+            for range in ranges { _ = try object(range, keys: ["black", "gamma", "white", "outputBlack", "outputWhite"]) }
+        }
+        if let v = a["curves"], !(v is NSNull) {
+            let settings = try object(v, keys: ["channel", "channels"])
+            guard let channels = settings["channels"] as? [[Any]], channels.count == 4 else { throw DocumentError.invalid("曲线通道无效") }
+            for points in channels {
+                guard (2...32).contains(points.count) else { throw DocumentError.invalid("曲线控制点数量无效") }
+                for point in points { _ = try object(point, keys: ["x", "y"]) }
             }
         }
     }

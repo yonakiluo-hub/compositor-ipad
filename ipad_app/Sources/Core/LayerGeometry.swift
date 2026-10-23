@@ -110,8 +110,13 @@ public enum LayerHierarchy {
     public static func validate(_ layers: [RasterLayer]) throws {
         var byID: [UUID: RasterLayer] = [:]
         for layer in layers {
+            if let adjustment = layer.adjustment {
+                guard adjustment.isValid, !layer.isGroup, layer.pngData == nil, layer.blendMode == .normal else {
+                    throw DocumentError.unsupported("调整层参数、像素资源或混合模式")
+                }
+            }
             guard byID.updateValue(layer, forKey: layer.id) == nil,
-                  !layer.isGroup || (layer.pngData == nil && layer.maskSourceID == nil && layer.blendMode == .normal)
+                  !layer.isGroup || (layer.pngData == nil && layer.maskSourceID == nil && layer.adjustment == nil && layer.blendMode == .normal)
             else { throw DocumentError.invalid("重复图层 ID 或不支持的图层组内容") }
         }
         // Compositor also supports arbitrary live-mask graphs. This iPad stage only
@@ -125,11 +130,11 @@ public enum LayerHierarchy {
                         throw DocumentError.invalid("剪贴蒙版引用无效")
                     }
                     guard !layer.isGroup, source == base, let original = byID[source],
-                          !original.isGroup, original.maskSourceID == nil,
+                          !original.isGroup, original.adjustment == nil, original.maskSourceID == nil,
                           original.parentID == layer.parentID else {
                         throw DocumentError.unsupported("剪贴图层必须连续排列在同组的基底层上方；请先解除剪贴关系，或将整组一起操作")
                     }
-                } else { base = layer.isGroup ? nil : layer.id }
+                } else { base = layer.isGroup || layer.adjustment != nil ? nil : layer.id }
             }
         }
         for layer in layers {

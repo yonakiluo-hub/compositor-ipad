@@ -53,8 +53,8 @@ final class LayerMaskStrokeSession {
             brushToPixels: model.renderer.pixelToDocument(layer, size: size).inverted())
         if let source = try model.renderer.image(for: layer) { sourcePixels = source }
         else {
-            // A group preview reads its children, never this placeholder image.
-            let pixelSize = try layer.isGroup ? CGSize(width: 1, height: 1) : model.renderer.pixelSize(of: layer)
+            // Groups and adjustments are composited from other layers, never this placeholder image.
+            let pixelSize = try layer.isGroup || layer.adjustment != nil ? CGSize(width: 1, height: 1) : model.renderer.pixelSize(of: layer)
             let context = try RasterImage.context(width: Int(pixelSize.width), height: Int(pixelSize.height))
             guard let image = context.makeImage() else { throw RasterError.allocation }
             sourcePixels = image

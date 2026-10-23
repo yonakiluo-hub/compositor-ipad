@@ -9,7 +9,8 @@ permissions:
 jobs:
   core-and-simulator:
     runs-on: macos-latest
-    timeout-minutes: 30
+    # Leave room for the full simulator suite and cleanup on slower hosted Macs.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Document, raster, protocol and archive tests

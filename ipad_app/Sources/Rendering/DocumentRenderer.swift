@@ -26,7 +26,7 @@ final class DocumentRenderer {
     }
     func clearCache() { images.removeAll(); masks.removeAll() }
     func pixelSize(of layer: RasterLayer) throws -> CGSize {
-        if layer.isGroup, let data = layer.maskPNGData {
+        if layer.isGroup || layer.adjustment != nil, let data = layer.maskPNGData {
             let size = try PNGAsset.inspect(data, requireGrayscale: true)
             return CGSize(width: size.width, height: size.height)
         }
@@ -88,8 +88,27 @@ final class DocumentRenderer {
         let byID = Dictionary(uniqueKeysWithValues: entries.map { ($0.layer.id, $0) })
         let siblings = Dictionary(grouping: layers, by: \.parentID)
         let clipped = Dictionary(grouping: entries.filter { $0.layer.maskSourceID != nil }, by: { $0.layer.maskSourceID! })
-        func drawOwn(_ entry: LayerHierarchyEntry, in target: CGContext, mode: LayerBlendMode? = nil) throws {
+        func drawOwn(_ entry: LayerHierarchyEntry, in target: CGContext, bounds: CGRect, mode: LayerBlendMode? = nil) throws {
             let layer = entry.layer
+            if let adjustment = layer.adjustment {
+                guard !adjustment.isIdentity, entry.effectiveOpacity > 0 else { return }
+                var coverage: CGContext?
+                let selectedMask = layer.id == layerID ? maskReplacement : .original
+                if layer.maskEnabled, let mask = try maskImage(for: layer, replacement: selectedMask) {
+                    let gray = try RasterImage.context(width: target.width, height: target.height, gray: true)
+                    gray.translateBy(x: -bounds.minX, y: -bounds.minY)
+                    let t = layer.transform
+                    gray.translateBy(x: t.center.x, y: t.center.y); gray.rotate(by: t.radians)
+                    gray.scaleBy(x: t.flipX ? -1 : 1, y: t.flipY ? -1 : 1)
+                    gray.interpolationQuality = t.sampling.quality
+                    let rect = CGRect(x: -t.size.width / 2, y: -t.size.height / 2, width: t.size.width, height: t.size.height)
+                    RasterImage.clip(mask, to: rect, context: gray)
+                    gray.setFillColor(gray: 1, alpha: 1); gray.fill(rect)
+                    coverage = gray
+                }
+                try ColorAdjustmentRaster.apply(adjustment, to: target, opacity: entry.effectiveOpacity, coverage: coverage)
+                return
+            }
             guard let image = layer.id == layerID ? replacement : try self.image(for: layer) else { return }
             target.saveGState()
             defer { target.restoreGState() }
@@ -100,7 +119,7 @@ final class DocumentRenderer {
         }
         func drawStack(_ entry: LayerHierarchyEntry, in target: CGContext, bounds: CGRect) throws {
             let children = (clipped[entry.layer.id] ?? []).filter(\.isVisible)
-            guard !children.isEmpty else { try drawOwn(entry, in: target); return }
+            guard !children.isEmpty else { try drawOwn(entry, in: target, bounds: bounds); return }
             // Ported from Compositor LiveMaskRenderer and BrushPixels.c at
             // 7c2a5a4, MIT © 2026 Wonder Assembly LLC. Stack colors are composed
             // on an opaque base, then its original coverage is restored ONCE.
@@ -119,7 +138,7 @@ final class DocumentRenderer {
             let stackWidth = Int(region.width), stackHeight = Int(region.height)
             let stack = try RasterImage.context(width: stackWidth, height: stackHeight)
             stack.translateBy(x: -region.minX, y: -region.minY)
-            try drawOwn(entry, in: stack, mode: .normal)
+            try drawOwn(entry, in: stack, bounds: region, mode: .normal)
             guard let data = stack.data else { throw RasterError.allocation }
             let pixels = data.assumingMemoryBound(to: UInt8.self)
             var coverage = [UInt8](repeating: 0, count: stackWidth * stackHeight)
@@ -133,7 +152,7 @@ final class DocumentRenderer {
                     pixels[offset + 3] = 255
                 }
             }
-            for child in children { try drawOwn(child, in: stack) }
+            for child in children { try drawOwn(child, in: stack, bounds: region) }
             for y in 0..<stackHeight {
                 for x in 0..<stackWidth {
                     let offset = y * stack.bytesPerRow + x * 4, alpha = Int(coverage[y * stackWidth + x])
@@ -291,7 +310,7 @@ final class DocumentRenderer {
     }
 
     private func expansionPlan(_ layer: RasterLayer, canvas: CGSize) throws -> ExpansionPlan? {
-        guard !layer.isGroup || layer.maskPNGData != nil else { return nil }
+        guard (!layer.isGroup && layer.adjustment == nil) || layer.maskPNGData != nil else { return nil }
         let size = try pixelSize(of: layer), mapping = pixelToDocument(layer, size: size)
         let corners = [CGPoint.zero, CGPoint(x: canvas.width, y: 0),
                        CGPoint(x: 0, y: canvas.height), CGPoint(x: canvas.width, y: canvas.height)]
@@ -352,7 +371,7 @@ final class DocumentRenderer {
 
     private func expanded(_ layer: RasterLayer, plan: ExpansionPlan) throws -> RasterLayer {
         var result = layer
-        if !layer.isGroup {
+        if !layer.isGroup && layer.adjustment == nil {
             let context = try RasterImage.context(width: Int(plan.bounds.width), height: Int(plan.bounds.height))
             context.interpolationQuality = .none; context.setBlendMode(.copy)
             if let source = try image(for: layer) {

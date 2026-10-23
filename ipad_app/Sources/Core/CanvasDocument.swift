@@ -56,15 +56,18 @@ public struct RasterLayer: Equatable, Identifiable, Sendable {
     public var maskEnabled: Bool
     /// Compositor v5+ live clipping source: the base of a contiguous sibling stack.
     public var maskSourceID: UUID?
+    /// Live parameters applied to the composite below this record; no source image is baked.
+    public var adjustment: LayerAdjustment?
 
     public init(id: UUID = UUID(), name: String = "图层", pngData: Data? = nil, transform: LayerTransform,
                 isVisible: Bool = true, isLocked: Bool = false, opacity: Double = 1,
                 blendMode: LayerBlendMode = .normal, parentID: UUID? = nil, isGroup: Bool = false,
-                maskPNGData: Data? = nil, maskEnabled: Bool = true, maskSourceID: UUID? = nil) {
+                maskPNGData: Data? = nil, maskEnabled: Bool = true, maskSourceID: UUID? = nil,
+                adjustment: LayerAdjustment? = nil) {
         self.id = id; self.name = name; self.pngData = pngData; self.transform = transform
         self.isVisible = isVisible; self.isLocked = isLocked; self.opacity = opacity; self.blendMode = blendMode
         self.parentID = parentID; self.isGroup = isGroup; self.maskPNGData = maskPNGData; self.maskEnabled = maskEnabled
-        self.maskSourceID = maskSourceID
+        self.maskSourceID = maskSourceID; self.adjustment = adjustment
     }
 }
 

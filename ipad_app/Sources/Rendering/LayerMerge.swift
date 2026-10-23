@@ -139,6 +139,9 @@ enum LayerMerge {
             layer.maskSourceID.map { removed.contains(layer.id) != removed.contains($0) } ?? false
         }) else { throw LayerMergeError.clippingDependency }
         let sources = document.layers.filter { removed.contains($0.id) }
+        guard !sources.contains(where: { $0.adjustment != nil }) else {
+            throw DocumentError.unsupported("调整层依赖下方内容，请使用盖印副本保留原有调整层")
+        }
         guard sources.contains(where: { !$0.isGroup }) else { throw LayerMergeError.noRasterContent }
         guard !sources.contains(where: { source in
             var cursor: RasterLayer? = source

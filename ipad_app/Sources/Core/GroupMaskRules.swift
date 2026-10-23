@@ -24,7 +24,13 @@ enum GroupMaskRules {
     static func validate(_ layers: [RasterLayer], bounds: CGRect, limit: Int = workingByteLimit) throws {
         let children = Dictionary(grouping: layers, by: \.parentID)
         func visit(_ parent: UUID?, bounds: CGRect, retained: Int) throws {
-            for layer in children[parent] ?? [] where layer.isVisible && layer.isGroup {
+            for layer in children[parent] ?? [] where layer.isVisible {
+                if layer.adjustment != nil, layer.maskEnabled, layer.maskPNGData != nil {
+                    guard retained + Int(bounds.width * bounds.height) <= limit else {
+                        throw DocumentError.unsupported("调整层蒙版临时合成超出内存预算")
+                    }
+                }
+                guard layer.isGroup else { continue }
                 if layer.maskPNGData != nil && layer.maskEnabled {
                     let region = region(for: layer, within: bounds)
                     guard !region.isNull, !region.isEmpty else { continue }
