@@ -59,12 +59,17 @@ final class BatchTransformSmokeTests: XCTestCase {
         XCTAssertFalse(app.switches["transform.aspect"].isEnabled)
         XCTAssertTrue(app.staticTexts["transform.rasterizationNotice"].label.contains("斜切"))
         app.buttons["transform.cancel"].tap(); app.buttons["layers.multiselect"].tap()
-        app.buttons["文件菜单"].tap(); app.buttons["保存工程"].tap(); app.terminate(); app.launch()
-        XCTAssertTrue(canvas.waitForExistence(timeout:10)); reveal(tool,in:app.scrollViews["editor.tools"],up:false); tool.tap()
-        XCTAssertTrue(geometry.waitForExistence(timeout:5)); XCTAssertEqual(geometry.label,committed)
-        XCTAssertEqual(app.staticTexts["layers.count"].label,"2 个图层")
-        XCTAssertFalse(app.alerts["操作未完成"].exists); snapshot("多层-分层重开")
-        app.buttons["transform.cancel"].tap()
+        app.buttons["文件菜单"].tap(); app.buttons["保存工程"].tap(); app.terminate()
+        // CI retained a tool snapshot from the terminated PID after relaunch.
+        // Rebuild the application/query tree for the new process; never retap on failure.
+        let reopened = XCUIApplication(); reopened.launch()
+        XCTAssertTrue(reopened.otherElements["editor.canvas"].waitForExistence(timeout:10))
+        XCTAssertEqual(reopened.staticTexts["layers.count"].label,"2 个图层")
+        let reopenedTool = reopened.buttons["tool.自由变换"], reopenedGeometry = reopened.staticTexts["transform.geometry"]
+        reveal(reopenedTool,in:reopened.scrollViews["editor.tools"],up:false); reopenedTool.tap()
+        XCTAssertTrue(reopenedGeometry.waitForExistence(timeout:5)); XCTAssertEqual(reopenedGeometry.label,committed)
+        XCTAssertFalse(reopened.alerts["操作未完成"].exists); snapshot("多层-分层重开")
+        reopened.buttons["transform.cancel"].tap()
     }
 
     func testGroupMaskMoveCancelNoOpPreservesRedoAndReopens() throws {
@@ -97,13 +102,15 @@ final class BatchTransformSmokeTests: XCTestCase {
         XCTAssertTrue(app.buttons["editor.redo"].isEnabled,"An unchanged common frame must preserve redo")
         app.buttons["editor.redo"].tap()
         app.buttons["文件菜单"].tap(); app.buttons["保存工程"].tap(); app.terminate()
-        XCUIDevice.shared.orientation = .portrait; app.launch()
-        XCTAssertTrue(canvas.waitForExistence(timeout:10))
-        XCTAssertTrue(app.buttons["layer.mask.图层组"].exists); XCTAssertEqual(app.staticTexts["layers.count"].label,"3 个图层")
-        reveal(tool,in:app.scrollViews["editor.tools"],up:false); tool.tap()
-        XCTAssertTrue(geometry.waitForExistence(timeout:5)); XCTAssertTrue(app.staticTexts["transform.scope"].label.contains("组内子层"))
-        XCTAssertFalse(app.alerts["操作未完成"].exists); snapshot("整组-蒙版与子层重开")
-        app.buttons["transform.cancel"].tap()
+        XCUIDevice.shared.orientation = .portrait
+        let reopened = XCUIApplication(); reopened.launch()
+        XCTAssertTrue(reopened.otherElements["editor.canvas"].waitForExistence(timeout:10))
+        XCTAssertTrue(reopened.buttons["layer.mask.图层组"].exists); XCTAssertEqual(reopened.staticTexts["layers.count"].label,"3 个图层")
+        let reopenedTool = reopened.buttons["tool.自由变换"], reopenedGeometry = reopened.staticTexts["transform.geometry"]
+        reveal(reopenedTool,in:reopened.scrollViews["editor.tools"],up:false); reopenedTool.tap()
+        XCTAssertTrue(reopenedGeometry.waitForExistence(timeout:5)); XCTAssertTrue(reopened.staticTexts["transform.scope"].label.contains("组内子层"))
+        XCTAssertFalse(reopened.alerts["操作未完成"].exists); snapshot("整组-蒙版与子层重开")
+        reopened.buttons["transform.cancel"].tap()
     }
 
     private func reveal(_ button: XCUIElement,in scroll: XCUIElement,up: Bool) {
