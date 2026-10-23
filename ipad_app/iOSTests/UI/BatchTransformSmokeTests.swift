@@ -1,6 +1,17 @@
 import XCTest
 
 final class BatchTransformSmokeTests: XCTestCase {
+    override func tearDownWithError() throws {
+        if (testRun?.failureCount ?? 0) > 0 {
+            let app = XCUIApplication(), state = app.state
+            let hierarchy = state == .runningForeground || state == .runningBackground ? app.debugDescription : "Application is not running"
+            let details = XCTAttachment(string:"state=\(state.rawValue)\n\(hierarchy)")
+            details.name = "共同变换失败-界面层级"; details.lifetime = .keepAlways; add(details)
+            snapshot("共同变换失败-屏幕")
+        }
+        try super.tearDownWithError()
+    }
+
     private func launchTwoLayers() throws -> XCUIApplication {
         continueAfterFailure = false; XCUIDevice.shared.orientation = .landscapeLeft
         let app = XCUIApplication(); app.launch()
@@ -145,8 +156,18 @@ final class BatchTransformSmokeTests: XCTestCase {
         } while ProcessInfo.processInfo.systemUptime < deadline
         XCTFail("Tool did not settle: samples=\(samples), stable=\(stableSnapshots), frame=\(lastFrame), viewport=\(lastViewport), hittable=\(lastHittable)",file:file,line:line)
     }
-    private func expect(_ predicate: NSPredicate,on element: XCUIElement) {
-        XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:predicate,object:element)],timeout:5),.completed)
+    private func expect(_ predicate: NSPredicate,on element: XCUIElement,
+                        file: StaticString = #filePath,line: UInt = #line) {
+        // Keep the original five-second state budget and exact predicate, without
+        // XCTest collecting an empty debug query after each unsuccessful sample.
+        let deadline = ProcessInfo.processInfo.systemUptime + 5
+        var samples = 0
+        repeat {
+            samples += 1
+            if predicate.evaluate(with:element) { return }
+            Thread.sleep(forTimeInterval:0.2)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        XCTFail("State did not match within 5s (\(samples) samples): \(predicate)",file:file,line:line)
     }
     private func numbers(_ element: XCUIElement) throws -> [CGFloat] {
         let text = element.label, expression = try NSRegularExpression(pattern:#"-?\d+(?:\.\d+)?"#)
