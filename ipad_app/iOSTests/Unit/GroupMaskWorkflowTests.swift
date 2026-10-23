@@ -127,7 +127,10 @@ final class GroupMaskWorkflowTests: XCTestCase {
         model.setLayerMultiSelecting(true); model.toggleLayerSelection(model.document.layers[1].id)
         XCTAssertFalse(model.commitLayerMaskStroke(session))
         XCTAssertThrowsError(try LayerMaskStrokeSession(model:model))
-        XCTAssertFalse(model.beginTransform())
+        let before = model.document
+        XCTAssertTrue(model.beginTransform())
+        XCTAssertEqual(model.transformSession?.scope, .layers)
+        model.cancelTransform(); XCTAssertEqual(model.document, before)
         XCTAssertTrue(model.document.layers[0].isGroup); XCTAssertNil(model.document.layers[0].pngData)
     }
 }

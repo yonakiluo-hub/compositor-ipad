@@ -387,7 +387,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         transformInputID = UUID()
         transformSessionID = session.id
         transformDrag = FreeTransformGesture(transform: session.current, handle: handle, start: start,
-                                             lockAspect: model.transformAspectLocked)
+                                             lockAspect: model.transformAspectLocked || model.transformRequiresAspectLock)
         startPoint = start
     }
 
