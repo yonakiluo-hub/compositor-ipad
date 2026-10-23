@@ -61,7 +61,17 @@ final class LayerPanelWorkflowTests: XCTestCase {
         model.errorMessage = nil
         model.updateLayer("不应应用") { $0.opacity = 0.2 }
         XCTAssertNotNil(model.errorMessage)
-        XCTAssertFalse(model.beginTransform())
+        model.errorMessage = nil
+        XCTAssertTrue(model.beginTransform())
+        let session = try XCTUnwrap(model.transformSession)
+        XCTAssertEqual(session.scope, .layers)
+        var moved = session.original; moved.origin.x += 5
+        XCTAssertTrue(model.previewTransform(moved, sessionID: session.id))
+        for layer in before.layers where model.selectedLayerIDs.contains(layer.id) {
+            let preview = try XCTUnwrap(model.transformPreviewDocument.layers.first { $0.id == layer.id })
+            XCTAssertEqual(preview.transform.origin.x, layer.transform.origin.x + 5)
+        }
+        model.cancelTransform()
         XCTAssertEqual(model.document, before)
         XCTAssertEqual(model.editor.undoCount, 0)
     }

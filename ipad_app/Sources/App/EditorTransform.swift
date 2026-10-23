@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-enum LayerTransformScope { case layer, selection }
+enum LayerTransformScope { case layer, selection, layers }
 
 /// The handle box may describe selected pixels rather than the source layer.
 /// Frozen source state and cached raster output keep previews out of history and
@@ -14,10 +14,13 @@ struct LayerTransformSession: Identifiable, Equatable {
     let scope: LayerTransformScope
     let sourceLayer: RasterLayer
     let sourceSelectionPNG: Data?
+    let sourceSelectedIDs: Set<UUID>
     let original: LayerTransform
     var current: LayerTransform
     fileprivate let selectionSource: SelectionTransformSource?
     fileprivate var selectionResult: SelectionTransformResult?
+    fileprivate let batchPlan: LayerBatchTransformPlan?
+    fileprivate var batchLayers: [RasterLayer]?
     var hasChanges: Bool { current != original }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -26,7 +29,9 @@ struct LayerTransformSession: Identifiable, Equatable {
         lhs.id == rhs.id && lhs.current == rhs.current
     }
 
-    fileprivate func matches(_ document: CanvasDocument) -> Bool {
+    fileprivate func matches(_ document: CanvasDocument, selection: Set<UUID>) -> Bool {
+        guard selection == sourceSelectedIDs else { return false }
+        if scope == .layers { return batchPlan?.matches(document) == true }
         guard document.id == documentID, document.revision == revision,
               document.activeLayerID == layerID, let layer = document.activeLayer else { return false }
         return !layer.isGroup && !document.isEffectivelyLocked(layerID) && layer == sourceLayer
@@ -39,9 +44,11 @@ extension EditorModel {
     /// and AI submission continue to use the committed document.
     var transformPreviewDocument: CanvasDocument {
         var result = document
-        guard tool == .transform, let session = transformSession, session.matches(result), session.current.isValid,
+        guard tool == .transform, let session = transformSession, session.matches(result, selection: selectedLayerIDs), session.current.isValid,
               let index = result.layers.firstIndex(where: { $0.id == session.layerID }) else { return result }
-        if session.scope == .selection {
+        if session.scope == .layers {
+            if let layers = session.batchLayers { result.layers = layers }
+        } else if session.scope == .selection {
             // The renderer must pair this geometry with transformPreviewReplacement.
             // No PNG is encoded as the pointer moves.
             if session.hasChanges, let replacement = session.selectionResult {
@@ -53,12 +60,21 @@ extension EditorModel {
 
     var transformPreviewReplacement: SelectionTransformResult? {
         guard tool == .transform, let session = transformSession, session.scope == .selection,
-              session.matches(document), session.current.isValid, session.hasChanges else { return nil }
+              session.matches(document, selection: selectedLayerIDs), session.current.isValid, session.hasChanges else { return nil }
         return session.selectionResult
     }
 
     var transformFixesLayerGeometry: Bool {
         transformPreviewReplacement?.rasterized == true
+    }
+
+    var transformRequiresAspectLock: Bool { transformSession?.batchPlan?.allowsNonUniformScale == false }
+
+    func flipCommonTransform(horizontal: Bool) {
+        guard let session = transformSession, session.scope == .layers else { return }
+        var next = session.current
+        if horizontal { next.flipX.toggle() } else { next.flipY.toggle() }
+        _ = previewTransform(next, sessionID: session.id)
     }
 
     var displayedSelectionPreview: CGImage? {
@@ -67,16 +83,24 @@ extension EditorModel {
 
     @discardableResult
     func beginTransform() -> Bool {
-        guard selectedLayerIDs.count <= 1 else {
-            errorMessage = "请先选择一个图层，再使用自由变换。多图层共同变换将在后续加入。"
-            return false
-        }
         layerEditTarget = .pixels
-        if tool == .transform, let session = transformSession, session.matches(document) { return true }
+        if tool == .transform, let session = transformSession, session.matches(document, selection: selectedLayerIDs) { return true }
         cancelTransform()
-        guard let layer = activeLayer, !layer.isGroup else {
+        guard let layer = activeLayer else {
             errorMessage = "请选择一个普通图层，再使用自由变换。"
             return false
+        }
+        if selectedLayerIDs.count > 1 || layer.isGroup {
+            do {
+                let plan = try LayerBatchTransformPlan(document: document, selectedIDs: selectedLayerIDs)
+                let session = LayerTransformSession(documentID: document.id, revision: document.revision,
+                    layerID: layer.id, scope: .layers, sourceLayer: layer, sourceSelectionPNG: document.selectionMaskPNGData,
+                    sourceSelectedIDs: selectedLayerIDs, original: plan.original, current: plan.original,
+                    selectionSource: nil, selectionResult: nil, batchPlan: plan, batchLayers: nil)
+                if !plan.allowsNonUniformScale { transformAspectLocked = true }
+                tool = .transform; transformSession = session
+                return true
+            } catch { errorMessage = error.localizedDescription; return false }
         }
         guard !document.isEffectivelyLocked(layer.id) else {
             errorMessage = DocumentError.lockedLayer.localizedDescription
@@ -95,8 +119,9 @@ extension EditorModel {
             let original = source?.original ?? layer.transform
             let session = LayerTransformSession(documentID: document.id, revision: document.revision,
                 layerID: layer.id, scope: selected ? .selection : .layer, sourceLayer: layer,
-                sourceSelectionPNG: document.selectionMaskPNGData, original: original, current: original,
-                selectionSource: source, selectionResult: nil)
+                sourceSelectionPNG: document.selectionMaskPNGData, sourceSelectedIDs: selectedLayerIDs,
+                original: original, current: original, selectionSource: source, selectionResult: nil,
+                batchPlan: nil, batchLayers: nil)
             tool = .transform
             transformSession = session
             return true
@@ -111,11 +136,14 @@ extension EditorModel {
     @discardableResult
     func previewTransform(_ transform: LayerTransform, sessionID: UUID) -> Bool {
         guard var session = transformSession, session.id == sessionID else { return false }
-        guard tool == .transform, session.matches(document) else { cancelTransform(); return false }
+        guard tool == .transform, session.matches(document, selection: selectedLayerIDs) else { cancelTransform(); return false }
         guard transform.isValid else { return false }
         guard transform != session.current else { return true }
         do {
-            if session.scope == .selection {
+            if session.scope == .layers {
+                guard let plan = session.batchPlan else { return false }
+                session.batchLayers = try plan.layers(following: transform)
+            } else if session.scope == .selection {
                 if transform == session.original { session.selectionResult = nil }
                 else {
                     guard let source = session.selectionSource else { return false }
@@ -134,13 +162,21 @@ extension EditorModel {
     @discardableResult
     func commitTransform(sessionID: UUID? = nil) -> Bool {
         guard let session = transformSession, sessionID == nil || session.id == sessionID else { return false }
-        guard tool == .transform, session.matches(document), session.current.isValid else {
+        guard tool == .transform, session.matches(document, selection: selectedLayerIDs), session.current.isValid else {
             cancelTransform()
             errorMessage = "文稿或图层已改变，请重新开始自由变换。"
             return false
         }
         guard session.hasChanges else { cancelTransform(); return true }
         do {
+            if session.scope == .layers {
+                guard let plan = session.batchPlan else { throw LayerBatchTransformError.stale }
+                try editor.transaction("共同变换图层") { document in
+                    try plan.apply(session.current, to: &document)
+                }
+                cancelTransform(); changed()
+                return true
+            }
             let imagePNG: Data?, maskPNG: Data?, selectionPNG: Data?
             let placement: LayerTransform
             if session.scope == .selection {
@@ -159,7 +195,7 @@ extension EditorModel {
                 placement = session.current
             }
             try editor.transaction(session.scope == .selection ? "变换选区内容" : "自由变换") { document in
-                guard session.matches(document), let index = document.layers.firstIndex(where: { $0.id == session.layerID }) else {
+                guard session.matches(document, selection: selectedLayerIDs), let index = document.layers.firstIndex(where: { $0.id == session.layerID }) else {
                     throw DocumentError.invalid("文稿或图层已改变，请重新开始自由变换")
                 }
                 document.layers[index].pngData = imagePNG

@@ -173,18 +173,28 @@ struct EditorView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 16) {
                 Toggle("锁定比例", isOn: $model.transformAspectLocked).fixedSize()
+                    .disabled(model.transformRequiresAspectLock)
                     .accessibilityIdentifier("transform.aspect")
+                if model.transformSession?.scope == .layers {
+                    Button("水平翻转") { model.flipCommonTransform(horizontal: true) }
+                        .accessibilityValue(model.transformSession?.current.flipX == true ? "已翻转" : "未翻转")
+                        .accessibilityIdentifier("transform.flipX")
+                    Button("垂直翻转") { model.flipCommonTransform(horizontal: false) }
+                        .accessibilityValue(model.transformSession?.current.flipY == true ? "已翻转" : "未翻转")
+                        .accessibilityIdentifier("transform.flipY")
+                }
                 Spacer()
                 Button("取消") { model.cancelTransform() }.accessibilityIdentifier("transform.cancel")
                 Button("完成") { model.commitTransform() }.buttonStyle(.borderedProminent)
                     .accessibilityIdentifier("transform.commit")
             }
             if let session = model.transformSession {
-                Text(session.scope == .selection ? "变换选中内容 · 选区随动 · 图层蒙版保持原位" : "变换整个图层 · 蒙版随动")
+                Text(session.scope == .layers ? "共同变换所选整层与组内子层 · 包括隐藏层 · 蒙版随动" :
+                    session.scope == .selection ? "变换选中内容 · 选区随动 · 图层蒙版保持原位" : "变换整个图层 · 蒙版随动")
                     .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("transform.scope")
                 Text(model.transformFixesLayerGeometry
                     ? "完成将按当前显示尺寸固定本层的缩放与旋转；取消或撤销可恢复原层。"
-                    : " ")
+                    : model.transformRequiresAspectLock ? "含非直角旋转的图层或组蒙版：缩放需锁定比例，避免斜切。" : " ")
                     .font(.caption).foregroundStyle(.orange).lineLimit(2).frame(height: 30, alignment: .leading)
                     .accessibilityIdentifier("transform.rasterizationNotice")
                 Text(String(format: "宽 %.1f · 高 %.1f px · 旋转 %.1f°　预览中，完成后保存",
@@ -344,6 +354,9 @@ struct EditorView: View {
                 }
             }
             maskControls(layer)
+            if layer.isGroup {
+                Button("变换图层组") { model.beginTransform() }.accessibilityIdentifier("layers.transformGroup")
+            }
             HStack {
                 if layer.isGroup {
                     Button("合并组") { model.mergeSelectedLayers() }.disabled(mergeIssue(model.selectedMergePlan) != nil)
@@ -404,6 +417,9 @@ struct EditorView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
             Text("已选 \(model.selectedLayerIDs.count) 项").font(.subheadline.bold()).accessibilityIdentifier("layers.selectionCount")
+            Button("共同变换") { model.beginTransform() }
+                .buttonStyle(.borderedProminent).disabled(model.selectedLayerIDs.isEmpty)
+                .accessibilityIdentifier("layers.transform")
             Button("合并所选图层") { model.mergeSelectedLayers() }
                 .buttonStyle(.borderedProminent).disabled(mergeIssue(model.selectedMergePlan) != nil)
                 .accessibilityIdentifier("layers.mergeSelected")
