@@ -49,3 +49,7 @@ The iPad editor includes and adapts code from [Compositor-ZH](https://github.com
 Apart from the adaptations listed above, the iPad UIKit input layer, bridge client, persistence extension and UI are developed in this repository. This notice does not change the license of unrelated project code. See [the port matrix](docs/COMPOSITOR_PORT_MATRIX.md) for inspected upstream files and feature boundaries.
 
 [comfyui-photoshop](https://github.com/NimaNzrii/comfyui-photoshop) was reviewed as an integration reference; its Photoshop plugin and custom-node code are not included here.
+
+### 曲线、色阶与调整层
+
+`ipad_app/Sources/Core/ColorAdjustments.swift` 的参数、保形 Hermite 曲线与色阶映射，及 `Rendering/ColorAdjustmentRaster.swift` 的 Float LUT/alpha 处理，适配自官方 Compositor 提交 `365b5745eda537f984f3d5bed1e53c361dbc9c91` 的 `Document/Curves.swift`、`Levels.swift`、`LayerAdjustment.swift` 与 `Rendering/LevelsPixels.c`。Copyright (c) 2026 Wonder Assembly LLC，MIT；保留的许可见 `licenses/Compositor-MIT.txt` 与 `licenses/Compositor-ZH-NOTICE.md`。iPad 自行接入事务、数值蒙版、穿透组合成边界、严格格式子集与触控交互；不引入 AppKit 面板。

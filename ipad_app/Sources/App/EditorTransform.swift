@@ -213,6 +213,7 @@ extension EditorModel {
     }
 
     func cancelTransform() {
+        cancelColorAdjustment()
         guard transformSession != nil || tool == .transform else { return }
         transformSession = nil
         if tool == .transform { tool = .move }

@@ -109,6 +109,9 @@ struct EditorView: View {
         .sheet(isPresented: Binding(get: { compactLayout && sidebar }, set: { sidebar = $0 })) { sidebarContent.presentationDetents([.medium, .large]) }
         .sheet(isPresented: $showNew) { NewDocumentSheet(model: model) }
         .sheet(isPresented: $showSize) { NewDocumentSheet(model: model, resizing: true) }
+        .sheet(isPresented: Binding(get: { model.colorAdjustmentSession != nil }, set: { if !$0 { model.cancelColorAdjustment() } })) {
+            ColorAdjustmentSheet(model: model)
+        }
         .sheet(isPresented: $showAdjustments) { AdjustmentSheet(model: model) }
         .sheet(isPresented: $showSelectionFeather) { SelectionFeatherSheet(model: model) }
         .sheet(isPresented: $showLibrary) { libraryView }
@@ -138,8 +141,20 @@ struct EditorView: View {
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward") }.disabled(!model.editor.canUndo).accessibilityLabel("撤销").accessibilityIdentifier("editor.undo")
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }.disabled(!model.editor.canRedo).accessibilityLabel("重做").accessibilityIdentifier("editor.redo")
             Divider().frame(height: 22)
-            Button { model.setLayerEditTarget(.pixels); showAdjustments = true } label: { Image(systemName: "slider.horizontal.3") }
-                .disabled(model.activeLayer?.pngData == nil || model.selectedLayerIDs.count > 1).accessibilityLabel("调整图层")
+            Menu {
+                ForEach(AdjustmentKind.allCases, id: \.self) { kind in
+                    Button("新建" + kind.title + "调整层", systemImage: kind.symbol) { model.beginColorAdjustment(kind) }
+                        .accessibilityIdentifier("adjustment.new." + kind.rawValue)
+                }
+                if model.activeLayer?.adjustment != nil {
+                    Button("编辑调整层") { model.beginColorAdjustment() }.accessibilityIdentifier("adjustment.edit")
+                }
+                Divider()
+                Button("亮度、对比度与模糊…") { model.setLayerEditTarget(.pixels); showAdjustments = true }
+                    .disabled(model.activeLayer?.pngData == nil)
+            } label: { Image(systemName: "slider.horizontal.3") }
+                .disabled(model.activeLayer == nil || model.selectedLayerIDs.count > 1).accessibilityLabel("调整图层")
+                .accessibilityIdentifier("editor.adjustments")
             Button { panel = 1; sidebar = true } label: { Label("AI", systemImage: "sparkles") }.accessibilityIdentifier("editor.ai")
             Button { sidebar.toggle() } label: { Image(systemName: "sidebar.right") }.accessibilityLabel("图层与 AI 面板")
         }.padding(.horizontal, 20).frame(height: 64)
@@ -293,7 +308,7 @@ struct EditorView: View {
                     ZStack {
                         RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.12))
                         if let data = layer.pngData, let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFit() }
-                        else { Image(systemName: layer.isGroup ? "folder" : "square.dashed").foregroundStyle(.secondary) }
+                        else { Image(systemName: layer.adjustment?.kind.symbol ?? (layer.isGroup ? "folder" : "square.dashed")).foregroundStyle(.secondary) }
                     }.frame(width: 40, height: 36)
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(
                             model.document.activeLayerID == layer.id && model.layerEditTarget == .pixels ? Color.accentColor : .clear, lineWidth: 2))
@@ -325,6 +340,10 @@ struct EditorView: View {
     private func layerControls(_ layer: RasterLayer) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Divider()
+            if let adjustment = layer.adjustment {
+                Button("编辑" + adjustment.kind.title + "参数") { model.beginColorAdjustment() }
+                    .accessibilityIdentifier("layer.editAdjustment")
+            }
             HStack { Text("不透明度"); Spacer(); Text("\(Int((editingOpacity ? draftOpacity : layer.opacity) * 100))%").monospacedDigit() }
             Slider(value: Binding(get: { editingOpacity ? draftOpacity : model.activeLayer?.opacity ?? 1 }, set: { draftOpacity = $0 }), in: 0...1, onEditingChanged: { editing in
                 if editing { draftOpacity = model.activeLayer?.opacity ?? 1; editingOpacity = true }
@@ -332,7 +351,7 @@ struct EditorView: View {
             })
             if !layer.isGroup {
                 Picker("混合模式", selection: Binding(get: { model.activeLayer?.blendMode ?? .normal }, set: { mode in model.updateLayer("混合模式") { $0.blendMode = mode } })) {
-                    ForEach(LayerBlendMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    ForEach(layer.adjustment == nil ? LayerBlendMode.allCases : [.normal], id: \.self) { Text($0.rawValue).tag($0) }
                 }.pickerStyle(.menu)
                 VStack(alignment: .leading, spacing: 5) {
                     Button(layer.maskSourceID == nil ? "创建剪贴蒙版" : "释放剪贴蒙版") {
@@ -345,12 +364,14 @@ struct EditorView: View {
                         Text(model.clippingIssue ?? "把本层限制在下方图层的轮廓内，可叠加上色与纹理。")
                     }
                 }.font(.caption2).foregroundStyle(.secondary)
-                HStack {
-                    Button("水平翻转") { model.updateLayer("翻转") { $0.transform.flipX.toggle() } }
-                    Button("旋转 90°") { model.updateLayer("旋转") { $0.transform.rotation += 90 } }
-                }
-                HStack {
-                    Button("缩小") { scaleLayer(0.9) }; Button("放大") { scaleLayer(1.1) }
+                if layer.adjustment == nil {
+                    HStack {
+                        Button("水平翻转") { model.updateLayer("翻转") { $0.transform.flipX.toggle() } }
+                        Button("旋转 90°") { model.updateLayer("旋转") { $0.transform.rotation += 90 } }
+                    }
+                    HStack {
+                        Button("缩小") { scaleLayer(0.9) }; Button("放大") { scaleLayer(1.1) }
+                    }
                 }
             }
             maskControls(layer)

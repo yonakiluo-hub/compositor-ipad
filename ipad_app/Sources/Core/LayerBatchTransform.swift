@@ -40,7 +40,7 @@ struct LayerBatchTransformPlan {
         guard carried.isDisjoint(with: locked) else { throw DocumentError.lockedLayer }
         guard document.layers.contains(where: { carried.contains($0.id) && !$0.isGroup && $0.pngData != nil })
         else { throw LayerBatchTransformError.empty }
-        let placed = document.layers.filter { carried.contains($0.id) && (!$0.isGroup || $0.maskPNGData != nil) }
+        let placed = document.layers.filter { carried.contains($0.id) && ((!$0.isGroup && $0.adjustment == nil) || $0.maskPNGData != nil) }
         geometryIDs = Set(placed.map(\.id)); carriedIDs = carried
         let corners = placed.flatMap { layer in
             [CGPoint.zero, CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 1)].map(layer.transform.point)

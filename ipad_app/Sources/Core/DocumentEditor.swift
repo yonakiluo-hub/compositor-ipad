@@ -95,7 +95,7 @@ public final class DocumentEditor {
 
     public func setPixels(layerID: UUID, pngData: Data?, name: String = "绘画") throws {
         try updateLayer(layerID, name: name) { layer in
-            guard !layer.isGroup else { throw DocumentError.invalid("不能在图层组上绘画") }
+            guard !layer.isGroup, layer.adjustment == nil else { throw DocumentError.invalid("请选择普通像素图层绘画") }
             layer.pngData = pngData
         }
     }
@@ -145,7 +145,7 @@ public final class DocumentEditor {
                         isLocked: layer.isLocked, opacity: layer.opacity, blendMode: layer.blendMode,
                         parentID: layer.parentID.map { mapping[$0] ?? $0 }, isGroup: layer.isGroup,
                         maskPNGData: layer.maskPNGData, maskEnabled: layer.maskEnabled,
-                        maskSourceID: layer.maskSourceID.map { mapping[$0] ?? $0 })
+                        maskSourceID: layer.maskSourceID.map { mapping[$0] ?? $0 }, adjustment: layer.adjustment)
         }
         try transaction("复制图层") { document in
             // Sibling order follows each root record, not the last descendant's array
@@ -175,7 +175,8 @@ public final class DocumentEditor {
         }
         let siblings = document.layers.filter { $0.parentID == layer.parentID }
         guard let index = siblings.firstIndex(where: { $0.id == layerID }), index > 0,
-              !siblings[index - 1].isGroup else {
+              !siblings[index - 1].isGroup,
+              siblings[index - 1].adjustment == nil || siblings[index - 1].maskSourceID != nil else {
             throw DocumentError.unsupported("请在同组普通图层的上方创建剪贴蒙版")
         }
         return siblings[index - 1].maskSourceID ?? siblings[index - 1].id

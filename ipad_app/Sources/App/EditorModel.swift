@@ -7,10 +7,17 @@ final class EditorModel: ObservableObject {
     @Published private(set) var editor: DocumentEditor
     @Published var tool: PadTool = .brush {
         didSet {
+            if tool != oldValue { cancelColorAdjustment() }
             if tool != .transform, transformSession != nil { transformSession = nil }
             if tool == .eraser, layerEditTarget == .mask { maskPaintReveals = false }
         }
     }
+    @Published var colorAdjustmentSession: ColorAdjustmentSession?
+    @Published var colorAdjustmentPreview: CGImage?
+    @Published var colorAdjustmentPreviewPending = false
+    @Published var colorAdjustmentPreviewError: String?
+    var colorAdjustmentTask: Task<Void, Never>?
+    var colorAdjustmentPreviewRequest = UUID()
     @Published var transformSession: LayerTransformSession?
     @Published var transformAspectLocked = true
     @Published var layerEditTarget: LayerEditTarget = .pixels
@@ -284,7 +291,9 @@ final class EditorModel: ObservableObject {
             errorMessage = "请先选择一个图层，再填充。"
             return
         }
-        guard let layer = activeLayer, !layer.isGroup else { return }
+        guard let layer = activeLayer, !layer.isGroup, layer.adjustment == nil else {
+            errorMessage = "调整层请编辑参数，或切换到蒙版绘画。"; return
+        }
         report {
             let size = try renderer.pixelSize(of: layer)
             let context = try RasterImage.context(width: Int(size.width), height: Int(size.height))
@@ -297,6 +306,7 @@ final class EditorModel: ObservableObject {
         }
     }
     func commitPixels(_ image: CGImage) {
+        guard activeLayer?.adjustment == nil else { errorMessage = "调整层没有可绘制的像素，请编辑参数或蒙版。"; return }
         report {
             let data = try RasterImage.png(image)
             updateLayer("绘画") { $0.pngData = data }
@@ -306,7 +316,7 @@ final class EditorModel: ObservableObject {
         report { let data = try RasterImage.png(image); edit("编辑选区") { $0.selectionMaskPNGData = data } }
     }
     func adjustmentImage(brightness: Double, contrast: Double, saturation: Double, blur: Double) throws -> CGImage? {
-        guard let layer = activeLayer, !layer.isGroup, let source = try renderer.image(for: layer) else { return nil }
+        guard let layer = activeLayer, !layer.isGroup, layer.adjustment == nil, let source = try renderer.image(for: layer) else { return nil }
         let adjusted = try renderer.adjusted(source, brightness: brightness, contrast: contrast, saturation: saturation, blur: blur)
         let context = try RasterImage.context(width: source.width, height: source.height)
         let rect = CGRect(x: 0, y: 0, width: source.width, height: source.height)
