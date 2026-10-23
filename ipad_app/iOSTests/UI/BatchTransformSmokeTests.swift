@@ -113,8 +113,9 @@ final class BatchTransformSmokeTests: XCTestCase {
         reopened.buttons["transform.cancel"].tap()
     }
 
-    private func reveal(_ button: XCUIElement,in scroll: XCUIElement,up: Bool) {
-        XCTAssertTrue(button.waitForExistence(timeout:5))
+    private func reveal(_ button: XCUIElement,in scroll: XCUIElement,up: Bool,
+                        file: StaticString = #filePath,line: UInt = #line) {
+        XCTAssertTrue(button.waitForExistence(timeout:5),file:file,line:line)
         func finite(_ frame: CGRect) -> Bool {
             !frame.isEmpty && [frame.minX,frame.minY,frame.width,frame.height].allSatisfy(\.isFinite)
         }
@@ -126,17 +127,23 @@ final class BatchTransformSmokeTests: XCTestCase {
             if finite(button.frame), scroll.frame.contains(button.frame) { break }
             if up { scroll.swipeUp() } else { scroll.swipeDown() }
         }
-        var previous = CGRect.null, stableSnapshots = 0
-        let settled = XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in
-            let frame = button.frame
-            guard finite(frame), scroll.frame.contains(frame), button.isHittable else {
-                previous = .null; stableSnapshots = 0; return false
-            }
-            stableSnapshots = frame == previous ? stableSnapshots + 1 : 0
-            previous = frame
-            return stableSnapshots >= 2
-        },object:button)
-        XCTAssertEqual(XCTWaiter.wait(for:[settled],timeout:10),.completed)
+        // A false predicate makes XCTest capture a full debug hierarchy on each
+        // poll. On a slow CI host that consumed the entire sampling budget after
+        // the first valid frame. Sample explicitly; capture diagnostics once.
+        let deadline = ProcessInfo.processInfo.systemUptime + 30
+        var previous = CGRect.null, stableSnapshots = 0, samples = 0
+        var lastFrame = CGRect.null, lastViewport = CGRect.null, lastHittable = false
+        repeat {
+            lastFrame = button.frame; lastViewport = scroll.frame; lastHittable = button.isHittable
+            samples += 1
+            if finite(lastFrame), lastViewport.contains(lastFrame), lastHittable {
+                stableSnapshots = lastFrame == previous ? stableSnapshots + 1 : 1
+                if stableSnapshots >= 3 { return }
+            } else { stableSnapshots = 0 }
+            previous = lastFrame
+            Thread.sleep(forTimeInterval:1)
+        } while ProcessInfo.processInfo.systemUptime < deadline
+        XCTFail("Tool did not settle: samples=\(samples), stable=\(stableSnapshots), frame=\(lastFrame), viewport=\(lastViewport), hittable=\(lastHittable)",file:file,line:line)
     }
     private func expect(_ predicate: NSPredicate,on element: XCUIElement) {
         XCTAssertEqual(XCTWaiter.wait(for:[XCTNSPredicateExpectation(predicate:predicate,object:element)],timeout:5),.completed)
