@@ -14,6 +14,10 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     private var rotationResetToken = -1
     private var panGesture: UIPanGestureRecognizer!
     private var transformDrag: FreeTransformGesture?
+    private var quadDrag:QuadWarpGesture?
+    private var quadSessionID:UUID?
+    private var quadInputID=UUID()
+    private var quadLastCorners:[CGPoint]?
     private var transformSessionID: UUID?
     private var transformInputID = UUID()
     private var isUpdatingView = false
@@ -69,6 +73,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         isUpdatingView = true
         defer { isUpdatingView = false }
         if transformDrag != nil && model.transformSession?.id != transformSessionID { cancelInput() }
+        if quadDrag != nil && model.quadWarpSession?.id != quadSessionID {cancelInput()}
         if let selectionDraft, !selectionDraft.matches(documentID: model.document.id, revision: model.document.revision,
                                                        kind: selectionKind(model.tool)) { cancelInput() }
         if inputTouch != nil && !inputIsCurrent { cancelInput() }
@@ -101,7 +106,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             viewport.resetRotation(documentSize: model.document.size); viewport.fit(documentSize: model.document.size)
             publishViewRotation()
         }
-        panGesture.minimumNumberOfTouches = model.fingerDrawing || model.tool == .transform ? 2 : 1
+        panGesture.minimumNumberOfTouches = model.tool.isTapSelection ? 1 : model.fingerDrawing || model.tool == .transform || model.tool == .quadWarp ? 2 : 1
         setNeedsDisplay()
     }
     override func layoutSubviews() {
@@ -162,7 +167,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         }
         var image = model.colorAdjustmentSession.map { model.colorAdjustmentIsCurrent($0) } == true
             ? (model.colorAdjustmentPreview ?? model.preview) : model.preview
-        if let session = model.transformSession {
+        if let session=model.quadWarpSession,model.quadWarpIsCurrent(session) {
+            image=model.quadWarpPreview ?? model.preview
+        } else if let session = model.transformSession {
             if let replacement = model.transformPreviewReplacement {
                 image = try? model.renderer.render(model.transformPreviewDocument, replacing: session.layerID,
                     with: replacement.image, replacementMask: replacement.mask)
@@ -213,7 +220,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
             }
         }
         context.restoreGState()
-        if let session = model.transformSession {
+        if let session=model.quadWarpSession,model.quadWarpIsCurrent(session) {
+            QuadWarpOverlay(corners:session.corners,viewport:viewport,documentSize:model.document.size).draw(in:context)
+        } else if let session = model.transformSession {
             TransformOverlayGeometry(transform: session.current, viewport: viewport, documentSize: model.document.size).draw(in: context)
         } else if model.tool == .move, let layer = model.activeLayer {
             var t = layer.transform
@@ -229,11 +238,19 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard inputTouch == nil, touches.count == 1, let touch = touches.first,
-              touch.type == .pencil || model.fingerDrawing || model.tool == .transform else { return }
+              touch.type == .pencil || model.fingerDrawing || model.tool == .transform || model.tool == .quadWarp || model.tool.isTapSelection else { return }
         if let draft = selectionDraft, !draft.matches(documentID: model.document.id, revision: model.document.revision, kind: selectionKind(model.tool)) { cancelInput() }
         inputTouch = touch; gestureTool = model.tool; strokeRevision = model.document.revision; strokeDocumentID = model.document.id
         strokeEditTarget = model.layerEditTarget
         let point = documentPoint(touch)
+        if gestureTool == .quadWarp {
+            guard let session=model.quadWarpSession,
+                  let hit=QuadWarpOverlay(corners:session.corners,viewport:viewport,documentSize:model.document.size).hit(touch.location(in:self)) else {cancelInput();return}
+            let corner:Int?
+            switch hit {case .corner(let index):corner=index;case .translate:corner=nil}
+            beginQuadDrag(corner:corner,start:point)
+            return
+        }
         if gestureTool == .transform {
             guard let session = model.transformSession,
                   let handle = TransformOverlayGeometry(transform: session.current, viewport: viewport, documentSize: model.document.size)
@@ -243,6 +260,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         }
         guard CGRect(origin: .zero, size: model.document.size).contains(point) else { cancelInput(keepingPolygon: true); return }
         startPoint = point
+        if gestureTool.isTapSelection { return }
         do {
             if gestureTool == .eyedropper { sampleColor(point); return }
             if let kind = selectionKind(gestureTool) {
@@ -282,7 +300,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         guard let touch = inputTouch, touches.contains(touch), let startPoint else { return }
         guard inputIsCurrent else { cancelInput(); return }
         let point = documentPoint(touch)
-        if gestureTool == .transform {
+        if gestureTool == .quadWarp {
+            updateQuadDrag(to:point)
+        } else if gestureTool == .transform {
             if let id = transformSessionID, let next = transformDrag?.updated(to: point) {
                 if !model.previewTransform(next, sessionID: id) { cancelInput() }
             }
@@ -295,6 +315,17 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = inputTouch, touches.contains(touch) else { return }
+        if gestureTool == .quadWarp {
+            if inputIsCurrent {touchesMoved(touches,with:nil)}
+            cancelInput(keepingTransformPreview:inputIsCurrent);return
+        }
+        if gestureTool.isTapSelection {
+            let end = documentPoint(touch), start = startPoint, kind:ImageSelectionKind = gestureTool == .magicWand ? .wand : .object
+            let valid = inputIsCurrent && start.map { hypot(end.x-$0.x,end.y-$0.y)*viewport.pointsPerPixel <= 12 } == true
+            cancelInput()
+            if valid { model.selectImage(at:end,kind:kind) }
+            return
+        }
         if gestureTool == .transform {
             if inputIsCurrent { touchesMoved(touches, with: nil) }
             cancelInput(keepingTransformPreview: inputIsCurrent)
@@ -383,6 +414,17 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         }
     }
     /// Start from the previous completed preview; cancelling this pointer must only undo this drag.
+    func beginQuadDrag(corner:Int?,start:CGPoint) {
+        guard let session=model.quadWarpSession else {return}
+        quadDrag=QuadWarpGesture(corners:session.corners,corner:corner,start:start,mode:session.mode)
+        quadSessionID=session.id;quadInputID=UUID();quadLastCorners=session.corners;startPoint=start
+    }
+    func updateQuadDrag(to point:CGPoint) {
+        guard let id=quadSessionID,let drag=quadDrag,let session=model.quadWarpSession,
+              session.id == id,model.quadWarpIsCurrent(session) else {return}
+        guard let next=drag.updated(to:point) else {model.quadWarpError="四角不能交叉、折叠或重合。";return}
+        if model.updateQuadWarp(next,sessionID:id) {quadLastCorners=next}
+    }
     func beginTransformDrag(handle: TransformHandle, start: CGPoint) {
         guard let session = model.transformSession else { return }
         transformInputID = UUID()
@@ -393,6 +435,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
     }
 
     func cancelInput(keepingPolygon: Bool = false, keepingTransformPreview: Bool = false) {
+        let cancelledQuad=keepingTransformPreview ? nil:quadDrag,quadID=quadSessionID,quadInput=quadInputID,lastQuad=quadLastCorners
         let cancelledDrag = keepingTransformPreview ? nil : transformDrag
         let cancelledSessionID = transformSessionID
         let cancelledInputID = transformInputID
@@ -403,7 +446,16 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         stroke = nil; maskStrokeSession = nil; strokeLayer = nil; strokeImage = nil; startPoint = nil
         inputTouch = nil; strokeDocumentID = nil; moveDelta = .zero; setNeedsDisplay()
         transformDrag = nil; transformSessionID = nil
+        quadDrag=nil;quadSessionID=nil;quadLastCorners=nil
         publishDraftCount()
+        if let cancelledQuad,let quadID,let lastQuad,lastQuad != cancelledQuad.corners {
+            let restore={ [weak self] in
+                guard let self,self.quadInputID == quadInput,self.model.quadWarpSession?.id == quadID,
+                      self.model.quadWarpSession?.corners == lastQuad else {return}
+                _ = self.model.updateQuadWarp(cancelledQuad.corners,sessionID:quadID)
+            }
+            if isUpdatingView {DispatchQueue.main.async(execute:restore)} else {restore()}
+        }
         guard let cancelledDrag, let cancelledSessionID, let cancelledPreview,
               cancelledPreview != cancelledDrag.original else { return }
         let restorePreview = { [weak self] in

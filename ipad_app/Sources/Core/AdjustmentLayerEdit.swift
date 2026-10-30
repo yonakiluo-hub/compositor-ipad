@@ -1,7 +1,7 @@
 import Foundation
 
 /// Freeze the whole composition: changes below a live adjustment invalidate an old editor too.
-struct AdjustmentLayerEdit {
+struct AdjustmentLayerEdit: Sendable {
     let source: CanvasDocument
     let layer: RasterLayer
     let isNew: Bool

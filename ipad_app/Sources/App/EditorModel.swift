@@ -7,7 +7,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var editor: DocumentEditor
     @Published var tool: PadTool = .brush {
         didSet {
-            if tool != oldValue { cancelColorAdjustment() }
+            if tool != oldValue { cancelColorAdjustment(); cancelImageSelection(); cancelQuadWarp() }
             if tool != .transform, transformSession != nil { transformSession = nil }
             if tool == .eraser, layerEditTarget == .mask { maskPaintReveals = false }
         }
@@ -18,6 +18,12 @@ final class EditorModel: ObservableObject {
     @Published var colorAdjustmentPreviewError: String?
     var colorAdjustmentTask: Task<Void, Never>?
     var colorAdjustmentPreviewRequest = UUID()
+    @Published var quadWarpSession:QuadWarpSession?
+    @Published var quadWarpPreview:CGImage?
+    @Published var quadWarpPending=false
+    @Published var quadWarpError:String?
+    var quadWarpTask:Task<Void,Never>?
+    var quadWarpRequest=UUID()
     @Published var transformSession: LayerTransformSession?
     @Published var transformAspectLocked = true
     @Published var layerEditTarget: LayerEditTarget = .pixels
@@ -35,8 +41,13 @@ final class EditorModel: ObservableObject {
     @Published var saveFailed = false
     @Published var preview: CGImage?
     @Published var selectionPreview: CGImage?
-    @Published var selectionMode: SelectionCombineMode = .replace
-    @Published var selectionFeather: Double = 0
+    @Published var selectionMode: SelectionCombineMode = .replace { didSet { if selectionMode != oldValue { cancelImageSelection() } } }
+    @Published var selectionFeather: Double = 0 { didSet { if selectionFeather != oldValue { cancelImageSelection() } } }
+    @Published var imageSelectionSettings = ImageSelectionSettings() { didSet { if imageSelectionSettings != oldValue { cancelImageSelection() } } }
+    @Published var imageSelectionBusy = false
+    var imageSelectionContext: ImageSelectionContext?
+    var imageSelectionTask: Task<Void,Never>?
+    var imageSubjectDetector: @Sendable (CGImage,CGPoint?) throws -> CGImage = { try ImageSelectionRaster.subject($0,at:$1) }
     @Published var selectionGestureCommand: SelectionGestureCommand?
     @Published var selectionDraftPointCount = 0
     @Published var viewportReset = 0
@@ -347,7 +358,7 @@ final class EditorModel: ObservableObject {
 }
 
 enum PadTool: String, CaseIterable, Identifiable {
-    case brush = "画笔", eraser = "橡皮", move = "移动", transform = "自由变换", mask = "选区笔", maskErase = "减选", rectangle = "矩形选区", ellipse = "椭圆选区", lasso = "自由套索", polygonLasso = "多边形套索", eyedropper = "吸色"
+    case brush = "画笔", eraser = "橡皮", move = "移动", transform = "自由变换", mask = "选区笔", maskErase = "减选", rectangle = "矩形选区", ellipse = "椭圆选区", lasso = "自由套索", polygonLasso = "多边形套索", eyedropper = "吸色", magicWand = "魔棒", objectSelection = "对象选取", quadWarp = "四角变换"
     var id: String { rawValue }
     var symbol: String {
         switch self {
@@ -355,8 +366,11 @@ enum PadTool: String, CaseIterable, Identifiable {
         case .transform: "arrow.up.left.and.arrow.down.right"
         case .mask: "paintbrush.pointed.fill"; case .maskErase: "minus.circle"; case .rectangle: "rectangle.dashed"
         case .ellipse: "circle.dashed"; case .lasso: "lasso"; case .polygonLasso: "pentagon"; case .eyedropper: "eyedropper"
+        case .magicWand: "wand.and.stars";case .objectSelection: "person.crop.rectangle"
+        case .quadWarp: "skew"
         }
     }
     var isShapeSelection: Bool { [.rectangle, .ellipse, .lasso, .polygonLasso].contains(self) }
-    var isSelection: Bool { [.mask, .maskErase].contains(self) || isShapeSelection }
+    var isTapSelection: Bool { [.magicWand,.objectSelection].contains(self) }
+    var isSelection: Bool { [.mask, .maskErase].contains(self) || isShapeSelection || isTapSelection }
 }
