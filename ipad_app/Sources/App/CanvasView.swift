@@ -221,6 +221,18 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
                 }
             }
         }
+        if model.showsGuides {
+            context.setStrokeColor(UIColor.cyan.withAlphaComponent(0.85).cgColor)
+            context.setLineWidth(1 / scale); context.setLineDash(phase: 0, lengths: [5 / scale, 3 / scale])
+            for guide in model.document.guides {
+                if guide.axis == .vertical {
+                    context.move(to: CGPoint(x: guide.position, y: 0)); context.addLine(to: CGPoint(x: guide.position, y: canvas.height))
+                } else {
+                    context.move(to: CGPoint(x: 0, y: guide.position)); context.addLine(to: CGPoint(x: canvas.width, y: guide.position))
+                }
+                context.strokePath()
+            }
+        }
         context.restoreGState()
         if let session=model.quadWarpSession,model.quadWarpIsCurrent(session) {
             QuadWarpOverlay(corners:session.corners,viewport:viewport,documentSize:model.document.size).draw(in:context)
@@ -239,7 +251,8 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         viewport.documentPoint(from: touch.location(in: self), documentSize: model.document.size)
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard model.layerEffectsSession == nil, model.layerContentSession == nil, inputTouch == nil, touches.count == 1, let touch = touches.first,
+        guard model.cropSession == nil, model.layerEffectsSession == nil, model.layerContentSession == nil,
+              inputTouch == nil, touches.count == 1, let touch = touches.first,
               touch.type == .pencil || model.fingerDrawing || model.tool == .transform || model.tool == .quadWarp || model.tool.isTapSelection else { return }
         if let draft = selectionDraft, !draft.matches(documentID: model.document.id, revision: model.document.revision, kind: selectionKind(model.tool)) { cancelInput() }
         inputTouch = touch; gestureTool = model.tool; strokeRevision = model.document.revision; strokeDocumentID = model.document.id

@@ -24,6 +24,7 @@ public enum DocumentStore {
         let height: Int
         let activeLayerID: UUID?
         let layers: [LayerRecord]
+        var guides: [CanvasGuide]? = nil
     }
 
     private struct LayerRecord: Codable {
@@ -82,7 +83,8 @@ public enum DocumentStore {
                                text: layer.text, shape: layer.shape, effects: layer.effects)
         }
         let manifest = Manifest(resolution: document.resolution, documentID: document.id, width: document.width,
-                                height: document.height, activeLayerID: document.activeLayerID, layers: records)
+                                height: document.height, activeLayerID: document.activeLayerID, layers: records,
+                                guides: document.guides.isEmpty ? nil : document.guides)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let metadata = try encoder.encode(manifest)
@@ -141,7 +143,8 @@ public enum DocumentStore {
         // artwork. Generation receipts and revision history belong to its former document.
         return CanvasDocument(name: name + suffix, width: document.width, height: document.height,
                               revision: 0, resolution: document.resolution, layers: document.layers,
-                              activeLayerID: document.activeLayerID, selectionMaskPNGData: document.selectionMaskPNGData)
+                              activeLayerID: document.activeLayerID, selectionMaskPNGData: document.selectionMaskPNGData,
+                              guides: document.guides)
     }
 
     private static func readPackage(_ url: URL) throws -> CanvasDocument {
@@ -229,7 +232,8 @@ public enum DocumentStore {
         let document = CanvasDocument(id: manifest.documentID, name: state?.name ?? url.deletingPathExtension().lastPathComponent,
                                       width: manifest.width, height: manifest.height, revision: state?.revision ?? foreignRevision,
                                       resolution: manifest.resolution ?? 72, layers: layers, activeLayerID: manifest.activeLayerID,
-                                      selectionMaskPNGData: selection, appliedAIResults: state?.appliedAIResults ?? [])
+                                      selectionMaskPNGData: selection, appliedAIResults: state?.appliedAIResults ?? [],
+                                      guides: manifest.guides ?? [])
         try document.validate()
         return document
     }
@@ -242,7 +246,10 @@ public enum DocumentStore {
         let rootKeys: Set<String> = ["format", "version", "colorSpace", "resolution", "documentID", "width", "height", "activeLayerID", "layers", "guides"]
         guard Set(root.keys).isSubset(of: rootKeys) else { throw DocumentError.unsupported("未知文稿字段") }
         if let guides = root["guides"], !(guides is NSNull) {
-            guard let values = guides as? [Any], values.isEmpty else { throw DocumentError.unsupported("辅助线") }
+            guard let values = guides as? [[String: Any]], values.count <= CanvasGuide.limit else { throw DocumentError.invalid("辅助线列表") }
+            for guide in values {
+                guard Set(guide.keys) == ["id", "axis", "position"] else { throw DocumentError.unsupported("未知辅助线字段") }
+            }
         }
         let layerKeys: Set<String> = ["id", "name", "isVisible", "transform", "imageFile", "parentID", "isGroup", "opacity", "blendMode", "maskFile", "maskEnabled", "maskSourceID", "adjustment", "maskPlacement", "maskLinked", "shape", "effects", "text"]
         let transformKeys: Set<String> = ["origin", "size", "rotation", "flipX", "flipY", "sampling"]

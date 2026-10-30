@@ -7,7 +7,7 @@ final class EditorModel: ObservableObject {
     @Published private(set) var editor: DocumentEditor
     @Published var tool: PadTool = .brush {
         didSet {
-            if tool != oldValue { cancelColorAdjustment(); cancelImageSelection(); cancelQuadWarp(); cancelLayerContent(); cancelLayerEffects() }
+            if tool != oldValue { cancelColorAdjustment(); cancelImageSelection(); cancelQuadWarp(); cancelLayerContent(); cancelLayerEffects(); cancelCanvasCrop() }
             if tool != .transform, transformSession != nil { transformSession = nil }
             if tool == .eraser, layerEditTarget == .mask { maskPaintReveals = false }
         }
@@ -65,6 +65,10 @@ final class EditorModel: ObservableObject {
     @Published var selectionGestureCommand: SelectionGestureCommand?
     @Published var selectionDraftPointCount = 0
     @Published var viewportReset = 0
+    @Published var cropSession: CanvasCropSession?
+    @Published var cropPreview: CGImage?
+    @Published var cropPreviewError: String?
+    @Published var showsGuides = true
     @Published var viewportRotationReset = 0
     @Published var viewportRotationDegrees: Double = 0
     @Published var pairing: BridgePairing?
@@ -218,6 +222,12 @@ final class EditorModel: ObservableObject {
             viewportReset += 1; changed(); restartRecovery()
         }
     }
+    /// Replace only after the external decoder has completely validated its source.
+    func editorReplaceForImport(_ document: CanvasDocument) throws {
+        editor = try DocumentEditor(document: document)
+        renderer.clearCache(); resetCandidateContext(); jobs.removeAll(); pendingRequests.removeAll()
+        viewportReset += 1; changed(); restartRecovery()
+    }
     func create(name: String, width: Int, height: Int) {
         cancelTransform()
         layerEditTarget = .pixels
@@ -253,18 +263,9 @@ final class EditorModel: ObservableObject {
     func importImage(_ url: URL) {
         report {
             let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-            let data = try Data(contentsOf: url)
-            guard let source = UIImage(data: data) else { throw RasterError.invalidImage }
-            let pixelSize = CGSize(width: source.size.width * source.scale, height: source.size.height * source.scale)
-            guard pixelSize.width <= 4096, pixelSize.height <= 4096, pixelSize.width * pixelSize.height <= 16_000_000 else { throw RasterError.oversized }
-            // UIKit applies EXIF orientation; the stored source is upright sRGB RGBA8.
-            let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.preferredRange = .standard
-            let upright = UIGraphicsImageRenderer(size: pixelSize, format: format).image { _ in source.draw(in: CGRect(origin: .zero, size: pixelSize)) }
-            guard let cg = upright.cgImage else { throw RasterError.invalidImage }
-            let context = try RasterImage.context(width: cg.width, height: cg.height)
-            RasterImage.draw(cg, in: CGRect(origin: .zero, size: pixelSize), context: context)
-            guard let normalized = context.makeImage() else { throw RasterError.allocation }
-            let png = try RasterImage.png(normalized)
+            let image = try ImageFileCodec.decode(ImageFileCodec.data(from: url))
+            let pixelSize = CGSize(width: image.width, height: image.height)
+            let png = try RasterImage.png(image)
             edit("导入图片") { document in
                 let factor = min(1, min(CGFloat(document.width) / pixelSize.width, CGFloat(document.height) / pixelSize.height))
                 let size = CGSize(width: pixelSize.width * factor, height: pixelSize.height * factor)

@@ -324,6 +324,9 @@ final class DocumentRenderer {
               width * height <= 16_000_000 else { throw RasterError.oversized }
         guard width != document.width || height != document.height else { return }
         if resample {
+            guard !document.layers.contains(where: \.hasEditableContent) else {
+                throw DocumentError.unsupported("图像尺寸调整需要先在图层面板栅格化文字或形状；画布尺寸和裁切可保留可编辑内容")
+            }
             let x = CGFloat(width) / CGFloat(document.width), y = CGFloat(height) / CGFloat(document.height)
             if abs(x - y) > 0.000001 && document.layers.contains(where: { abs($0.transform.rotation.truncatingRemainder(dividingBy: 180)) > 0.000001 }) {
                 throw DocumentError.unsupported("旋转图层暂不支持非等比例图像缩放，请保持宽高比例")
@@ -331,6 +334,9 @@ final class DocumentRenderer {
             for i in document.layers.indices {
                 document.layers[i].transform.origin.x *= x; document.layers[i].transform.origin.y *= y
                 document.layers[i].transform.size.width *= x; document.layers[i].transform.size.height *= y
+            }
+            for i in document.guides.indices {
+                document.guides[i].position *= Double(document.guides[i].axis == .vertical ? x : y)
             }
         } else if width > document.width || height > document.height {
             // Plan all allocations first so an unsupported layer leaves the transaction intact.
