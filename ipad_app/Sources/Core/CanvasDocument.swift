@@ -58,16 +58,22 @@ public struct RasterLayer: Equatable, Identifiable, Sendable {
     public var maskSourceID: UUID?
     /// Live parameters applied to the composite below this record; no source image is baked.
     public var adjustment: LayerAdjustment?
+    /// The source PNG is the display fallback; these records allow a later edit.
+    public var text: LayerTextStyle?
+    public var shape: LayerShapeStyle?
+    public var effects: LayerEffects?
 
     public init(id: UUID = UUID(), name: String = "图层", pngData: Data? = nil, transform: LayerTransform,
                 isVisible: Bool = true, isLocked: Bool = false, opacity: Double = 1,
                 blendMode: LayerBlendMode = .normal, parentID: UUID? = nil, isGroup: Bool = false,
                 maskPNGData: Data? = nil, maskEnabled: Bool = true, maskSourceID: UUID? = nil,
-                adjustment: LayerAdjustment? = nil) {
+                adjustment: LayerAdjustment? = nil, text: LayerTextStyle? = nil,
+                shape: LayerShapeStyle? = nil, effects: LayerEffects? = nil) {
         self.id = id; self.name = name; self.pngData = pngData; self.transform = transform
         self.isVisible = isVisible; self.isLocked = isLocked; self.opacity = opacity; self.blendMode = blendMode
         self.parentID = parentID; self.isGroup = isGroup; self.maskPNGData = maskPNGData; self.maskEnabled = maskEnabled
         self.maskSourceID = maskSourceID; self.adjustment = adjustment
+        self.text = text; self.shape = shape; self.effects = effects
     }
 }
 
@@ -114,8 +120,10 @@ public struct CanvasDocument: Equatable, Identifiable, Sendable {
               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.utf8.count <= 16_384
         else { throw DocumentError.invalid("文稿名称、版本或分辨率无效") }
         try LayerHierarchy.validate(layers)
-        var pixels = 0, maskPixels = 0
+        var pixels = 0, maskPixels = 0, contentBytes = 0
         for layer in layers {
+            contentBytes += layer.text?.estimatedBytes ?? 0
+            guard contentBytes <= 4 * 1024 * 1024 else { throw DocumentError.tooLarge }
             guard layer.transform.isValid, layer.opacity.isFinite, (0...1).contains(layer.opacity),
                   !layer.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, layer.name.utf8.count <= 16_384
             else { throw DocumentError.invalid("图层参数无效") }

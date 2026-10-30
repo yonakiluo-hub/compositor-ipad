@@ -7,12 +7,26 @@ final class EditorModel: ObservableObject {
     @Published private(set) var editor: DocumentEditor
     @Published var tool: PadTool = .brush {
         didSet {
-            if tool != oldValue { cancelColorAdjustment(); cancelImageSelection(); cancelQuadWarp() }
+            if tool != oldValue { cancelColorAdjustment(); cancelImageSelection(); cancelQuadWarp(); cancelLayerContent(); cancelLayerEffects() }
             if tool != .transform, transformSession != nil { transformSession = nil }
             if tool == .eraser, layerEditTarget == .mask { maskPaintReveals = false }
         }
     }
     @Published var colorAdjustmentSession: ColorAdjustmentSession?
+    @Published var layerContentSession: LayerContentSession?
+    @Published var layerContentPreview: CGImage?
+    @Published var layerContentPreviewPending = false
+    @Published var layerContentPreviewError: String?
+    var layerContentTask: Task<Void, Never>?
+    var layerContentPreviewRequest = UUID()
+    var layerContentPrepared: CanvasDocument?
+    @Published var layerEffectsSession: LayerEffectsSession?
+    @Published var layerEffectsPreview: CGImage?
+    @Published var layerEffectsPreviewPending = false
+    @Published var layerEffectsPreviewError: String?
+    var layerEffectsTask: Task<Void, Never>?
+    var layerEffectsPreviewRequest = UUID()
+    var layerEffectsPrepared: CanvasDocument?
     @Published var colorAdjustmentPreview: CGImage?
     @Published var colorAdjustmentPreviewPending = false
     @Published var colorAdjustmentPreviewError: String?
@@ -303,6 +317,7 @@ final class EditorModel: ObservableObject {
             return
         }
         guard let layer = activeLayer, !layer.isGroup else { return }
+        guard !layer.hasEditableContent else { errorMessage = "请先在图层面板栅格化文字或形状，再填充像素；蒙版可直接编辑。"; return }
         guard layer.adjustment == nil else {
             errorMessage = "调整层请编辑参数，或切换到蒙版绘画。"; return
         }
@@ -318,6 +333,7 @@ final class EditorModel: ObservableObject {
         }
     }
     func commitPixels(_ image: CGImage) {
+        guard activeLayer?.hasEditableContent != true else { errorMessage = "请先在图层面板栅格化文字或形状，再绘画像素。"; return }
         guard activeLayer?.adjustment == nil else { errorMessage = "调整层没有可绘制的像素，请编辑参数或蒙版。"; return }
         report {
             let data = try RasterImage.png(image)
@@ -328,7 +344,8 @@ final class EditorModel: ObservableObject {
         report { let data = try RasterImage.png(image); edit("编辑选区") { $0.selectionMaskPNGData = data } }
     }
     func adjustmentImage(brightness: Double, contrast: Double, saturation: Double, blur: Double) throws -> CGImage? {
-        guard let layer = activeLayer, !layer.isGroup, layer.adjustment == nil, let source = try renderer.image(for: layer) else { return nil }
+        guard let layer = activeLayer, !layer.isGroup, layer.adjustment == nil, !layer.hasEditableContent,
+              let source = try renderer.image(for: layer) else { return nil }
         let adjusted = try renderer.adjusted(source, brightness: brightness, contrast: contrast, saturation: saturation, blur: blur)
         let context = try RasterImage.context(width: source.width, height: source.height)
         let rect = CGRect(x: 0, y: 0, width: source.width, height: source.height)
@@ -338,6 +355,7 @@ final class EditorModel: ObservableObject {
         return context.makeImage()
     }
     func applyAdjustment(brightness: Double, contrast: Double, saturation: Double, blur: Double) {
+        guard activeLayer?.hasEditableContent != true else { errorMessage = "像素调整需要先栅格化；原文字、形状和效果可通过撤销恢复。"; return }
         report {
             guard let image = try adjustmentImage(brightness: brightness, contrast: contrast, saturation: saturation, blur: blur) else { return }
             let png = try RasterImage.png(image)

@@ -39,6 +39,16 @@ public final class DocumentEditor {
         let before = document
         var after = before
         try edit(&after)
+        // A shape's radius stays in document pixels when its geometry is resized.
+        // Preserve already prepared caches; do not touch unchanged source PNGs.
+        let oldLayers = Dictionary(uniqueKeysWithValues: before.layers.map { ($0.id, $0) })
+        for i in after.layers.indices {
+            let layer = after.layers[i]
+            if layer.shape != nil, let old = oldLayers[layer.id], layer.pngData == old.pngData,
+               layer.shape != old.shape || layer.transform.size != old.transform.size {
+                after.layers[i] = try LayerContentRaster.redrawShape(layer)
+            }
+        }
         guard after.id == before.id else { throw DocumentError.wrongDocument }
         after.revision = before.revision
         // Selecting a layer is navigation, not an edit.
@@ -95,7 +105,7 @@ public final class DocumentEditor {
 
     public func setPixels(layerID: UUID, pngData: Data?, name: String = "绘画") throws {
         try updateLayer(layerID, name: name) { layer in
-            guard !layer.isGroup, layer.adjustment == nil else { throw DocumentError.invalid("请选择普通像素图层绘画") }
+            guard !layer.isGroup, layer.adjustment == nil, !layer.hasEditableContent else { throw DocumentError.invalid("请先将文字或形状栅格化，再编辑像素") }
             layer.pngData = pngData
         }
     }
@@ -145,7 +155,8 @@ public final class DocumentEditor {
                         isLocked: layer.isLocked, opacity: layer.opacity, blendMode: layer.blendMode,
                         parentID: layer.parentID.map { mapping[$0] ?? $0 }, isGroup: layer.isGroup,
                         maskPNGData: layer.maskPNGData, maskEnabled: layer.maskEnabled,
-                        maskSourceID: layer.maskSourceID.map { mapping[$0] ?? $0 }, adjustment: layer.adjustment)
+                        maskSourceID: layer.maskSourceID.map { mapping[$0] ?? $0 }, adjustment: layer.adjustment,
+                        text: layer.text, shape: layer.shape, effects: layer.effects)
         }
         try transaction("复制图层") { document in
             // Sibling order follows each root record, not the last descendant's array
@@ -282,7 +293,10 @@ public final class DocumentEditor {
         // Conservative accounting deliberately overcounts shared immutable Data rather than
         // retaining an unbounded history of full-resolution brush images on an iPad.
         func bytes(_ doc: CanvasDocument) -> Int {
-            doc.layers.reduce(doc.selectionMaskPNGData?.count ?? 0) { $0 + ($1.pngData?.count ?? 0) + ($1.maskPNGData?.count ?? 0) }
+            doc.layers.reduce(doc.selectionMaskPNGData?.count ?? 0) {
+                $0 + ($1.pngData?.count ?? 0) + ($1.maskPNGData?.count ?? 0) + ($1.text?.estimatedBytes ?? 0)
+                    + ($1.shape == nil ? 0 : 128) + ($1.effects == nil ? 0 : 768)
+            }
         }
         var retained = past.reduce(0) { $0 + bytes($1.before) + bytes($1.after) }
         while !past.isEmpty && (past.count > historyLimit || retained > historyByteLimit) {

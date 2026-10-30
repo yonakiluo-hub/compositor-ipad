@@ -40,6 +40,9 @@ public enum DocumentStore {
         var maskEnabled: Bool?
         var maskSourceID: UUID?
         var adjustment: LayerAdjustment?
+        var text: LayerTextStyle?
+        var shape: LayerShapeStyle?
+        var effects: LayerEffects?
     }
 
     private struct IPadState: Codable {
@@ -75,7 +78,8 @@ public enum DocumentStore {
                                transform: layer.transform, imageFile: imageFile, parentID: layer.parentID,
                                isGroup: layer.isGroup ? true : nil, opacity: layer.opacity, blendMode: layer.blendMode,
                                maskFile: maskFile, maskEnabled: maskFile == nil ? nil : layer.maskEnabled,
-                               maskSourceID: layer.maskSourceID, adjustment: layer.adjustment)
+                               maskSourceID: layer.maskSourceID, adjustment: layer.adjustment,
+                               text: layer.text, shape: layer.shape, effects: layer.effects)
         }
         let manifest = Manifest(resolution: document.resolution, documentID: document.id, width: document.width,
                                 height: document.height, activeLayerID: document.activeLayerID, layers: records)
@@ -192,6 +196,9 @@ public enum DocumentStore {
                   manifest.version >= 4 || (record.maskFile == nil && record.maskEnabled == nil),
                   manifest.version >= 5 || record.maskSourceID == nil,
                   manifest.version >= 8 || record.isGroup != true || (record.opacity ?? 1) == 1,
+                  manifest.version >= 10 || record.text?.colorRuns == nil,
+                  manifest.version >= 11 || record.text?.fontRuns == nil,
+                  manifest.version >= 14 || record.shape?.smoothing != true,
                   record.maskEnabled == nil || record.maskFile != nil else { throw DocumentError.invalid("图层字段与工程版本不一致") }
             return RasterLayer(id: record.id, name: record.name,
                                pngData: try asset(record.imageFile, layerID: record.id, mask: false), transform: record.transform,
@@ -199,7 +206,8 @@ public enum DocumentStore {
                                opacity: record.opacity ?? 1, blendMode: record.blendMode ?? .normal,
                                parentID: record.parentID, isGroup: record.isGroup ?? false,
                                maskPNGData: try asset(record.maskFile, layerID: record.id, mask: true), maskEnabled: record.maskEnabled ?? true,
-                               maskSourceID: record.maskSourceID, adjustment: record.adjustment)
+                               maskSourceID: record.maskSourceID, adjustment: record.adjustment,
+                               text: record.text, shape: record.shape, effects: record.effects)
         }
         if layers.contains(where: { $0.isGroup && $0.maskPNGData != nil }), state?.groupMaskCompositing != GroupMaskRules.semantics {
             throw DocumentError.unsupported("组蒙版合成语义缺失或不兼容；请保留原 iPad 工程状态")
@@ -240,9 +248,10 @@ public enum DocumentStore {
         let transformKeys: Set<String> = ["origin", "size", "rotation", "flipX", "flipY", "sampling"]
         for layer in layers {
             guard Set(layer.keys).isSubset(of: layerKeys) else { throw DocumentError.unsupported("未知图层字段") }
-            for field in ["maskPlacement", "shape", "effects", "text"] {
+            for field in ["maskPlacement"] {
                 if let value = layer[field], !(value is NSNull) { throw DocumentError.unsupported(field) }
             }
+            try checkContentJSON(layer)
             if let adjustment = layer["adjustment"], !(adjustment is NSNull) {
                 try checkAdjustmentJSON(adjustment)
             }
@@ -252,6 +261,45 @@ public enum DocumentStore {
             if let mode = layer["blendMode"] as? String, LayerBlendMode(rawValue: mode) == nil { throw DocumentError.unsupported("混合模式 \(mode)") }
             if let transform = layer["transform"] as? [String: Any], !Set(transform.keys).isSubset(of: transformKeys) {
                 throw DocumentError.unsupported("未知变换字段")
+            }
+        }
+    }
+
+    /// Every nested field must be recognized before JSONDecoder can ignore it.
+    private static func checkContentJSON(_ layer: [String: Any]) throws {
+        func object(_ value: Any, keys: Set<String>) throws -> [String: Any] {
+            guard let v = value as? [String: Any], Set(v.keys).isSubset(of: keys)
+            else { throw DocumentError.unsupported("未知文字、形状或效果字段") }
+            return v
+        }
+        if let value = layer["text"], !(value is NSNull) {
+            let text = try object(value, keys: ["content", "fontName", "fontSize", "red", "green", "blue", "alignment", "tracking", "leading", "boxSize", "colorRuns", "fontRuns"])
+            if let size = text["boxSize"], !(size is NSNull) {
+                guard let v = size as? [Any], v.count == 2 else { throw DocumentError.invalid("文字边界无效") }
+            }
+            for (field, keys) in [("colorRuns", Set(["location", "length", "red", "green", "blue"])), ("fontRuns", Set(["location", "length", "fontName"]))] {
+                if let v = text[field], !(v is NSNull) {
+                    guard let runs = v as? [Any] else { throw DocumentError.invalid("文字局部样式无效") }
+                    for run in runs { _ = try object(run, keys: keys) }
+                }
+            }
+        }
+        if let value = layer["shape"], !(value is NSNull) {
+            let shape = try object(value, keys: ["kind", "red", "green", "blue", "cornerRadius", "smoothing", "lineWidth", "start", "end"])
+            for key in ["start", "end"] {
+                if let point = shape[key], !(point is NSNull) {
+                    guard let v = point as? [Any], v.count == 2 else { throw DocumentError.invalid("直线端点无效") }
+                }
+            }
+        }
+        if let value = layer["effects"], !(value is NSNull) {
+            let effects = try object(value, keys: ["stroke", "shadow", "colorOverlay", "innerShadow", "outerGlow", "innerGlow"])
+            for (kind, record) in effects where !(record is NSNull) {
+                var keys: Set<String> = ["enabled", "red", "green", "blue", "opacity"]
+                if ["stroke", "outerGlow", "innerGlow"].contains(kind) { keys.insert("size") }
+                if kind == "stroke" { keys.insert("inside") }
+                if ["shadow", "innerShadow"].contains(kind) { keys.formUnion(["angle", "distance", "blur"]) }
+                _ = try object(record, keys: keys)
             }
         }
     }

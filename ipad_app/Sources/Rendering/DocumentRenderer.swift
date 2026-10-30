@@ -10,6 +10,18 @@ final class DocumentRenderer {
 
     private var images: [UUID: (Data, CGImage)] = [:]
     private var masks: [UUID: (Data, CGImage)] = [:]
+    private var shapePreviews: [UUID: (Data, LayerShapeStyle, CGSize, CGImage)] = [:]
+    private struct EffectImage {
+        let source: CGImage
+        let mask: CGImage?
+        let effects: LayerEffects
+        let image: CGImage
+        let inset: CGFloat
+        var bytes: Int { image.width * image.height * 4 }
+    }
+    private var effectImages: [UUID: EffectImage] = [:]
+    private var effectOrder: [UUID] = []
+    private var effectBytes = 0
     private let ciContext = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
     private let groupMaskWorkingByteLimit: Int
 
@@ -19,12 +31,27 @@ final class DocumentRenderer {
 
     func image(for layer: RasterLayer) throws -> CGImage? {
         guard let data = layer.pngData else { return nil }
+        if let shape = layer.shape {
+            let size = try PNGAsset.inspect(data)
+            // A fractional document rectangle can share the same ceil-sized
+            // pixel grid as its old cache. It still needs the same precise-size
+            // redraw that the transaction performs, or its corner radius changes
+            // between preview and commit (for example 64 → 63.2 document pixels).
+            if CGFloat(size.width) != layer.transform.size.width || CGFloat(size.height) != layer.transform.size.height {
+                if let cached = shapePreviews[layer.id], cached.0 == data, cached.1 == shape, cached.2 == layer.transform.size { return cached.3 }
+                let image = try LayerContentRaster.shapeImage(shape, size: layer.transform.size)
+                shapePreviews[layer.id] = (data, shape, layer.transform.size, image); return image
+            }
+        }
         if let hit = images[layer.id], hit.0 == data { return hit.1 }
         let image = try RasterImage.decode(data)
         images[layer.id] = (data, image)
         return image
     }
-    func clearCache() { images.removeAll(); masks.removeAll() }
+    func clearCache() {
+        images.removeAll(); masks.removeAll(); shapePreviews.removeAll()
+        effectImages.removeAll(); effectOrder.removeAll(); effectBytes = 0
+    }
     func pixelSize(of layer: RasterLayer) throws -> CGSize {
         if layer.isGroup || layer.adjustment != nil, let data = layer.maskPNGData {
             let size = try PNGAsset.inspect(data, requireGrayscale: true)
@@ -68,6 +95,9 @@ final class DocumentRenderer {
                                   replacing: layerID, with: replacement, maskReplacement: maskReplacement)
         let ids = Set(document.layers.map(\.id))
         images = images.filter { ids.contains($0.key) }; masks = masks.filter { ids.contains($0.key) }
+        shapePreviews = shapePreviews.filter { ids.contains($0.key) }
+        effectImages = effectImages.filter { ids.contains($0.key) }
+        effectOrder = effectOrder.filter { effectImages[$0] != nil }; effectBytes = effectImages.values.reduce(0) { $0 + $1.bytes }
         return image
     }
 
@@ -128,11 +158,7 @@ final class DocumentRenderer {
             // Only the base can supply final coverage. Keep the surface on the
             // document's integer pixel grid and include an antialiasing margin;
             // small cropped layers do not allocate or scan the entire canvas.
-            let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0),
-                           CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 1)].map(entry.layer.transform.point)
-            let x = corners.map(\.x).min()!, y = corners.map(\.y).min()!
-            let quad = CGRect(x: x, y: y, width: corners.map(\.x).max()! - x,
-                              height: corners.map(\.y).max()! - y)
+            let quad = try LayerEffectsRaster.bounds(of: entry.layer)
             let region = quad.insetBy(dx: -2, dy: -2).integral.intersection(bounds)
             guard !region.isNull, !region.isEmpty else { return }
             let stackWidth = Int(region.width), stackHeight = Int(region.height)
@@ -249,16 +275,40 @@ final class DocumentRenderer {
     private func drawLayer(_ layer: RasterLayer, image: CGImage, context: CGContext,
                            maskReplacement: MaskReplacement) throws {
         let transform = layer.transform
+        let mask = layer.maskEnabled ? try maskImage(for: layer, replacement: maskReplacement) : nil
+        var drawable = image, inset: CGFloat = 0
+        if let effects = layer.effects, effects.hasVisibleEffects {
+            let cached = effectImages[layer.id]
+            if let cached, cached.source === image, cached.mask.map(ObjectIdentifier.init) == mask.map(ObjectIdentifier.init), cached.effects == effects {
+                drawable = cached.image; inset = cached.inset
+            } else {
+                let working = try LayerEffectsRaster.workingBytes(source: CGSize(width: image.width, height: image.height), effects: effects)
+                guard working + LayerEffectsRaster.cacheByteLimit <= LayerEffectsRaster.workingByteLimit else {
+                    throw DocumentError.unsupported("图层效果与缓存超出内存预算")
+                }
+                let built = try LayerEffectsRaster.render(image, mask: mask, effects: effects)
+                drawable = built.image; inset = built.inset
+                if let old = effectImages.removeValue(forKey: layer.id) { effectBytes -= old.bytes }
+                effectOrder.removeAll { $0 == layer.id }
+                let entry = EffectImage(source: image, mask: mask, effects: effects, image: drawable, inset: inset)
+                if entry.bytes <= LayerEffectsRaster.cacheByteLimit {
+                    while !effectOrder.isEmpty && (effectBytes + entry.bytes > LayerEffectsRaster.cacheByteLimit || effectOrder.count >= 32) {
+                        if let old = effectImages.removeValue(forKey: effectOrder.removeFirst()) { effectBytes -= old.bytes }
+                    }
+                    effectImages[layer.id] = entry; effectOrder.append(layer.id); effectBytes += entry.bytes
+                }
+            }
+        }
         context.translateBy(x: transform.center.x, y: transform.center.y)
         context.rotate(by: transform.radians)
         context.scaleBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? -1 : 1)
         let rect = CGRect(x: -transform.size.width / 2, y: -transform.size.height / 2,
                           width: transform.size.width, height: transform.size.height)
         context.interpolationQuality = transform.sampling.quality
-        if layer.maskEnabled {
-            if let mask = try maskImage(for: layer, replacement: maskReplacement) { RasterImage.clip(mask, to: rect, context: context) }
-        }
-        RasterImage.draw(image, in: rect, context: context)
+        if inset == 0, let mask { RasterImage.clip(mask, to: rect, context: context) }
+        let drawnRect = rect.insetBy(dx: -inset * transform.size.width / CGFloat(image.width),
+                                    dy: -inset * transform.size.height / CGFloat(image.height))
+        RasterImage.draw(drawable, in: drawnRect, context: context)
     }
     func layerOnCanvas(_ layer: RasterLayer, document: CanvasDocument) throws -> CGImage {
         let context = try RasterImage.context(width: document.width, height: document.height)
@@ -310,6 +360,9 @@ final class DocumentRenderer {
     }
 
     private func expansionPlan(_ layer: RasterLayer, canvas: CGSize) throws -> ExpansionPlan? {
+        // Parametric content keeps its own editable rectangle. Padding its cached
+        // PNG would change the relation between that rectangle and the metadata.
+        guard !layer.hasEditableContent else { return nil }
         guard (!layer.isGroup && layer.adjustment == nil) || layer.maskPNGData != nil else { return nil }
         let size = try pixelSize(of: layer), mapping = pixelToDocument(layer, size: size)
         let corners = [CGPoint.zero, CGPoint(x: canvas.width, y: 0),

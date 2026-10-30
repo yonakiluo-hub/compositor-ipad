@@ -167,8 +167,10 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         }
         var image = model.colorAdjustmentSession.map { model.colorAdjustmentIsCurrent($0) } == true
             ? (model.colorAdjustmentPreview ?? model.preview) : model.preview
-        if let session=model.quadWarpSession,model.quadWarpIsCurrent(session) {
-            image=model.quadWarpPreview ?? model.preview
+        if let session = model.layerEffectsSession, model.layerEffectsIsCurrent(session) { image = model.layerEffectsPreview ?? model.preview }
+        else if let session = model.layerContentSession, model.layerContentIsCurrent(session) { image = model.layerContentPreview ?? model.preview }
+        if let session = model.quadWarpSession, model.quadWarpIsCurrent(session) {
+            image = model.quadWarpPreview ?? model.preview
         } else if let session = model.transformSession {
             if let replacement = model.transformPreviewReplacement {
                 image = try? model.renderer.render(model.transformPreviewDocument, replacing: session.layerID,
@@ -237,7 +239,7 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
         viewport.documentPoint(from: touch.location(in: self), documentSize: model.document.size)
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard inputTouch == nil, touches.count == 1, let touch = touches.first,
+        guard model.layerEffectsSession == nil, model.layerContentSession == nil, inputTouch == nil, touches.count == 1, let touch = touches.first,
               touch.type == .pencil || model.fingerDrawing || model.tool == .transform || model.tool == .quadWarp || model.tool.isTapSelection else { return }
         if let draft = selectionDraft, !draft.matches(documentID: model.document.id, revision: model.document.revision, kind: selectionKind(model.tool)) { cancelInput() }
         inputTouch = touch; gestureTool = model.tool; strokeRevision = model.document.revision; strokeDocumentID = model.document.id
@@ -282,6 +284,9 @@ final class PadCanvasView: UIView, UIGestureRecognizerDelegate {
                 guard !model.document.isEffectivelyLocked(layer.id) else { throw DocumentError.lockedLayer }
                 strokeLayer = layer
                 if gestureTool == .move { return }
+                guard model.layerEditTarget == .mask || !layer.hasEditableContent else {
+                    throw DocumentError.invalid("请先在图层面板栅格化文字或形状，再绘画像素；蒙版可直接编辑")
+                }
                 if model.layerEditTarget == .mask {
                     let session = try LayerMaskStrokeSession(model: model)
                     maskStrokeSession = session; stroke = session.stroke

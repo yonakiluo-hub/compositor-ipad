@@ -47,6 +47,14 @@ final class ImageSelectionWorkflowTests:XCTestCase {
         XCTAssertTrue(m.selectImage(kind:.subject));m.tool = .brush;await finish(m)
         XCTAssertNil(m.document.selectionMaskPNGData)
     }
+    @MainActor func testRawLayerSamplingExcludesEffectsWhileVisibleCompositeKeepsThem() throws {
+        let m = try fixture()
+        let source = try NumericSelectionRaster.rgba(m.imageSelectionSample(m.document, allLayers: false))
+        m.updateLayer("颜色叠加") { $0.effects = LayerEffects(colorOverlay: ColorOverlayEffect(red: 0, green: 0, blue: 1, opacity: 1)) }
+        XCTAssertEqual(try NumericSelectionRaster.rgba(m.imageSelectionSample(m.document, allLayers: false)), source)
+        XCTAssertNotEqual(try NumericSelectionRaster.rgba(m.imageSelectionSample(m.document, allLayers: true)), source)
+    }
+
     @MainActor func testNoOpAndFailurePreserveRedoAndRawSamplingIgnoresLiveColorPreview() async throws {
         let m=try fixture();m.updateLayer("暂改"){$0.opacity=0.5};m.undo();XCTAssertTrue(m.editor.canRedo)
         let before=m.document

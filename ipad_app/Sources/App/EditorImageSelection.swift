@@ -92,7 +92,7 @@ extension EditorModel {
         }
         var sample = source
         var raw = layer;raw.parentID = nil;raw.maskSourceID = nil;raw.maskPNGData = nil
-        raw.opacity = 1;raw.blendMode = .normal;raw.isVisible = true
+        raw.opacity = 1;raw.blendMode = .normal;raw.isVisible = true;raw.effects = nil
         sample.layers = [raw];sample.activeLayerID = raw.id
         return try DocumentRenderer().render(sample)
     }

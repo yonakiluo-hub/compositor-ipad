@@ -171,11 +171,7 @@ enum LayerMerge {
         var extent = CGRect.null
         for layer in layers {
             guard layer.transform.isValid else { throw DocumentError.invalid("图层变换无效") }
-            let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0),
-                           CGPoint(x: 0, y: 1), CGPoint(x: 1, y: 1)].map(layer.transform.point)
-            for point in corners {
-                extent = extent.union(CGRect(origin: point, size: .zero))
-            }
+            extent = extent.union(try LayerEffectsRaster.bounds(of: layer))
         }
         // Right-angle rotations have tiny trigonometric residue; do not grow their
         // integer rectangle by an extra pixel solely because of that residue.

@@ -91,6 +91,12 @@ extension EditorModel {
             errorMessage = "请选择一个普通图层，再使用自由变换。"
             return false
         }
+        guard !layer.hasEditableContent || document.selectionMaskPNGData == nil else {
+            errorMessage = "选中像素变换需要先栅格化文字或形状；取消选区可变换整个可编辑图层。"; return false
+        }
+        guard layer.effects?.isEmpty != false || document.selectionMaskPNGData == nil else {
+            errorMessage = "选中像素变换前请移除图层效果或使用盖印副本；取消选区可变换整个图层。"; return false
+        }
         if selectedLayerIDs.count > 1 || layer.isGroup {
             do {
                 let plan = try LayerBatchTransformPlan(document: document, selectedIDs: selectedLayerIDs)
@@ -214,6 +220,8 @@ extension EditorModel {
     }
 
     func cancelTransform() {
+        cancelLayerEffects()
+        cancelLayerContent()
         cancelColorAdjustment()
         cancelImageSelection()
         cancelQuadWarp()

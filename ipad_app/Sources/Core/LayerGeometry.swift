@@ -110,13 +110,19 @@ public enum LayerHierarchy {
     public static func validate(_ layers: [RasterLayer]) throws {
         var byID: [UUID: RasterLayer] = [:]
         for layer in layers {
+            guard layer.text == nil || (layer.text!.isValid && layer.shape == nil && layer.pngData != nil && !layer.isGroup && layer.adjustment == nil),
+                  layer.shape == nil || (layer.shape!.isValid && layer.text == nil && layer.pngData != nil && !layer.isGroup && layer.adjustment == nil),
+                  layer.effects == nil || (layer.effects!.isValid && layer.pngData != nil && !layer.isGroup && layer.adjustment == nil)
+            else { throw DocumentError.unsupported("文字、形状或效果参数及资源") }
             if let adjustment = layer.adjustment {
-                guard adjustment.isValid, !layer.isGroup, layer.pngData == nil, layer.blendMode == .normal else {
+                guard adjustment.isValid, !layer.isGroup, layer.pngData == nil, layer.blendMode == .normal,
+                      layer.text == nil, layer.shape == nil, layer.effects == nil else {
                     throw DocumentError.unsupported("调整层参数、像素资源或混合模式")
                 }
             }
             guard byID.updateValue(layer, forKey: layer.id) == nil,
-                  !layer.isGroup || (layer.pngData == nil && layer.maskSourceID == nil && layer.adjustment == nil && layer.blendMode == .normal)
+                  !layer.isGroup || (layer.pngData == nil && layer.maskSourceID == nil && layer.adjustment == nil && layer.blendMode == .normal
+                    && layer.text == nil && layer.shape == nil && layer.effects == nil)
             else { throw DocumentError.invalid("重复图层 ID 或不支持的图层组内容") }
         }
         // Compositor also supports arbitrary live-mask graphs. This iPad stage only
