@@ -115,6 +115,12 @@ final class LayerWarpSource:@unchecked Sendable {
         guard selectedIDs.count<=1,let layer=document.activeLayer,!layer.isGroup,layer.adjustment == nil else {
             throw DocumentError.invalid("四角变换当前仅支持一个普通图层或其中的选中像素；不会压平组或多选。")
         }
+        guard !layer.hasEditableContent else {
+            throw DocumentError.invalid("请先在图层面板栅格化文字或形状，再进行透视或扭曲；撤销可恢复可编辑内容。")
+        }
+        guard layer.effects?.isEmpty != false else {
+            throw DocumentError.unsupported("带图层效果的透视或扭曲需要先移除效果，或使用盖印副本；整层自由变换可保留效果。")
+        }
         guard selectedIDs.isEmpty || selectedIDs.contains(layer.id) else {throw DocumentError.invalid("图层选择已改变，请重新选择一个图层。")}
         guard !document.isEffectivelyLocked(layer.id) else {throw DocumentError.lockedLayer}
         guard let image=try renderer.image(for:layer) else {throw DocumentError.invalid("当前图层没有可变换像素。")}

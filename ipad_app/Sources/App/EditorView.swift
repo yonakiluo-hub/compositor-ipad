@@ -114,6 +114,12 @@ struct EditorView: View {
         .sheet(isPresented: Binding(get: { model.colorAdjustmentSession != nil }, set: { if !$0 { model.cancelColorAdjustment() } })) {
             ColorAdjustmentSheet(model: model)
         }
+        .sheet(isPresented: Binding(get: { model.layerContentSession != nil }, set: { if !$0 { model.cancelLayerContent() } })) {
+            ContentEditorSheet(model: model)
+        }
+        .sheet(isPresented: Binding(get: { model.layerEffectsSession != nil }, set: { if !$0 { model.cancelLayerEffects() } })) {
+            LayerEffectsSheet(model: model)
+        }
         .sheet(isPresented: $showAdjustments) { AdjustmentSheet(model: model) }
         .sheet(isPresented: $showSelectionFeather) { SelectionFeatherSheet(model: model) }
         .sheet(item:$selectionResize) { context in SelectionResizeSheet(model:model,documentID:context.documentID,revision:context.revision) }
@@ -150,6 +156,18 @@ struct EditorView: View {
                 }
             } label:{Image(systemName:"skew")}.accessibilityLabel("透视与扭曲").accessibilityIdentifier("editor.geometry")
             Menu {
+                Button("新建文字图层", systemImage: "textformat") { model.beginLayerContent(.text) }.accessibilityIdentifier("content.new.text")
+                Button("新建形状图层", systemImage: "square.on.circle") { model.beginLayerContent(.shape) }.accessibilityIdentifier("content.new.shape")
+                if model.activeLayer?.hasEditableContent == true {
+                    Button("编辑文字或形状") { model.beginLayerContent() }.accessibilityIdentifier("content.edit")
+                }
+                Divider()
+                Button("图层效果…", systemImage: "fx") { model.beginLayerEffects() }
+                    .disabled(model.activeLayer?.pngData == nil || model.activeLayer?.isGroup == true || model.activeLayer?.adjustment != nil)
+                    .accessibilityIdentifier("effects.edit")
+            } label: { Image(systemName: "textformat") }
+                .disabled(model.selectedLayerIDs.count > 1).accessibilityLabel("文字与形状").accessibilityIdentifier("editor.content")
+            Menu {
                 ForEach(AdjustmentKind.allCases, id: \.self) { kind in
                     Button("新建" + kind.title + "调整层", systemImage: kind.symbol) { model.beginColorAdjustment(kind) }
                         .accessibilityIdentifier("adjustment.new." + kind.rawValue)
@@ -159,7 +177,7 @@ struct EditorView: View {
                 }
                 Divider()
                 Button("亮度、对比度与模糊…") { model.setLayerEditTarget(.pixels); showAdjustments = true }
-                    .disabled(model.activeLayer?.pngData == nil)
+                    .disabled(model.activeLayer?.pngData == nil || model.activeLayer?.hasEditableContent == true)
             } label: { Image(systemName: "slider.horizontal.3") }
                 .disabled(model.activeLayer == nil || model.selectedLayerIDs.count > 1).accessibilityLabel("调整图层")
                 .accessibilityIdentifier("editor.adjustments")
@@ -354,6 +372,11 @@ struct EditorView: View {
     private func layerControls(_ layer: RasterLayer) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Divider()
+            if layer.hasEditableContent {
+                Button(layer.text != nil ? "编辑文字" : "编辑形状") { model.beginLayerContent() }.accessibilityIdentifier("layer.editContent")
+                Button("栅格化为像素层") { model.rasterizeLayerContent() }.accessibilityIdentifier("layer.rasterizeContent")
+                Text("像素工具需先栅格化；蒙版和普通变换保留结构。栅格化可撤销。").font(.caption2).foregroundStyle(.secondary)
+            }
             if let adjustment = layer.adjustment {
                 Button("编辑" + adjustment.kind.title + "参数") { model.beginColorAdjustment() }
                     .accessibilityIdentifier("layer.editAdjustment")

@@ -9,8 +9,8 @@ permissions:
 jobs:
   core-and-simulator:
     runs-on: macos-latest
-    # Leave room for the full simulator suite and cleanup on slower hosted Macs.
-    timeout-minutes: 45
+    # The expanded native/UI suite also needs room for build and runner cleanup.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Document, raster, protocol and archive tests

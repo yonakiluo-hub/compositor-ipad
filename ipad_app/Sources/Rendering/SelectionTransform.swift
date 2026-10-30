@@ -55,6 +55,12 @@ final class SelectionTransformSource {
     /// Decoded sources keep the one-time document-grid fallback out of PNG encoding.
     private init(layer: RasterLayer, image: CGImage, mask: CGImage?, selection: CGImage,
                  handleBox: LayerTransform? = nil) throws {
+        // A document-grid fallback changes the raw pixel frame. Keeping spatial
+        // effect parameters in that new frame would rotate/resize the effects.
+        // Keep every stored effect, including disabled ones, intact instead.
+        guard layer.effects?.isEmpty != false else {
+            throw DocumentError.unsupported("选中像素变换前请移除图层效果或使用盖印副本；取消选区可变换整个图层。")
+        }
         let gray = try Self.grayBytes(selection)
         guard let bounds = Self.nonzeroBounds(gray, width: selection.width, height: selection.height, stride: 1, channel: 0) else {
             throw DocumentError.invalid("选区为空，无法变换")

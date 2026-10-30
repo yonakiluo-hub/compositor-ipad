@@ -91,6 +91,19 @@ final class QuadWarpWorkflowTests:XCTestCase {
         view.cancelInput();XCTAssertEqual(m.quadWarpSession?.id,next.id);XCTAssertEqual(m.quadWarpSession?.corners,next.plan.original)
         m.cancelQuadWarp();await finish(m)
     }
+    @MainActor func testEffectsRejectDestructiveWarpWithoutChangingDocumentOrRedo() throws {
+        let m = try fixture()
+        m.updateLayer("阴影") { $0.effects = LayerEffects(shadow: ShadowEffect(angle: 90, distance: 8, blur: 0)) }
+        m.updateLayer("暂改") { $0.opacity = 0.5 }; m.undo()
+        let before = m.document, count = m.editor.undoCount
+        XCTAssertTrue(m.editor.canRedo); XCTAssertFalse(m.beginQuadWarp(.distort))
+        XCTAssertEqual(m.document, before); XCTAssertEqual(m.editor.undoCount, count); XCTAssertTrue(m.editor.canRedo)
+        XCTAssertTrue(m.errorMessage?.contains("效果") == true)
+        XCTAssertThrowsError(try LayerWarpSource(document: before, selectedIDs: m.selectedLayerIDs, renderer: m.renderer))
+        XCTAssertTrue(m.beginTransform()); m.cancelTransform()
+        XCTAssertEqual(m.document, before); XCTAssertTrue(m.editor.canRedo)
+    }
+
     @MainActor func testLockedGroupAndMultiSelectionRejectWithoutHistory() throws {
         let m=try fixture(),count=m.editor.undoCount
         m.selectedLayerIDs.insert(UUID());XCTAssertFalse(m.beginQuadWarp(.distort));XCTAssertEqual(m.editor.undoCount,count)

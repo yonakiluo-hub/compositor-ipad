@@ -25,6 +25,13 @@ enum GroupMaskRules {
         let children = Dictionary(grouping: layers, by: \.parentID)
         func visit(_ parent: UUID?, bounds: CGRect, retained: Int) throws {
             for layer in children[parent] ?? [] where layer.isVisible {
+                if let effects = layer.effects, effects.hasVisibleEffects, let data = layer.pngData {
+                    let pixels = try PNGAsset.inspect(data)
+                    let size = layer.shape == nil ? CGSize(width: pixels.width, height: pixels.height)
+                        : CGSize(width: ceil(layer.transform.size.width), height: ceil(layer.transform.size.height))
+                    let needed = try LayerEffectsRaster.workingBytes(source: size, effects: effects)
+                    guard retained + needed + LayerEffectsRaster.cacheByteLimit <= limit else { throw DocumentError.unsupported("图层效果与嵌套组蒙版合成超出内存预算") }
+                }
                 if layer.adjustment != nil, layer.maskEnabled, layer.maskPNGData != nil {
                     guard retained + Int(bounds.width * bounds.height) <= limit else {
                         throw DocumentError.unsupported("调整层蒙版临时合成超出内存预算")
