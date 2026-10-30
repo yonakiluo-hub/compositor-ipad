@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Wonder Assembly LLC. MIT; see licenses/Compositor-MIT.txt.
 // Upstream: 7c2a5a4a3e7f685a8a0ec282ef0b4284f20b5477.
 // iPad: frozen raster selection, numeric gray sampling, and alpha-preserving soft overlap.
+// Four-corner extension follows Distort.swift at 365b5745eda537f984f3d5bed1e53c361dbc9c91 (same MIT license).
 import Foundation
 import CoreGraphics
 
@@ -158,6 +159,82 @@ final class SelectionTransformSource {
         }
         return SelectionTransformResult(image: try Self.rgbaImage(output, width: width, height: height),
             transform: expandedTransform, mask: try expandedMask(extent), selection: try movedSelection(documentMap))
+    }
+
+    /// A projective edit uses the same frozen lift/complement and alpha refill as
+    /// ordinary selected-pixel transforms. A rotated/scaled source is regridded
+    /// once, keeping its separate mask fixed in document coordinates.
+    func previewQuad(_ corners:[CGPoint]) throws -> SelectionTransformResult {
+        if corners == QuadWarp.corners(of:original) {
+            return SelectionTransformResult(image:sourceImage,transform:layer.transform,mask:layerMask,selection:selectionImage)
+        }
+        func near(_ a:CGFloat,_ b:CGFloat=0)->Bool {abs(a-b)<1e-7}
+        let nativeGrid=near(toDocument.a,1) && near(toDocument.d,1) && near(toDocument.b) && near(toDocument.c)
+            && near(toDocument.tx,toDocument.tx.rounded()) && near(toDocument.ty,toDocument.ty.rounded())
+            && (layerMask.map{$0.width == sourceImage.width && $0.height == sourceImage.height} ?? true)
+        if !nativeGrid {
+            if cachedRegriddedSource == nil {
+                let grid=try LayerRegrid.prepare(layer:layer,image:sourceImage,mask:layerMask)
+                var next=layer;next.transform=grid.transform
+                cachedRegriddedSource=try SelectionTransformSource(layer:next,image:grid.image,mask:grid.mask,selection:selectionImage,handleBox:original)
+            }
+            let result=try cachedRegriddedSource!.previewQuad(corners)
+            return SelectionTransformResult(image:result.image,transform:result.transform,mask:result.mask,selection:result.selection,rasterized:true)
+        }
+        let map=try QuadWarp(source:CGRect(origin:original.origin,size:original.size),corners:corners)
+        _=try map.bounds()
+        _=try map.projectedBounds(liftedBounds.applying(toDocument))
+        let fromDocument=toDocument.inverted()
+        func forward(_ point:CGPoint) throws -> CGPoint {
+            guard let moved=map.forward(point.applying(toDocument)) else {throw DocumentError.invalid("扭曲选区超出可表示范围。")}
+            return moved.applying(fromDocument)
+        }
+        func bounds(_ rect:CGRect,_ mapping:(CGPoint)throws->CGPoint) throws -> CGRect {
+            let points=try Self.corners(rect).map(mapping)
+            guard points.allSatisfy({$0.x.isFinite && $0.y.isFinite}) else {throw RasterError.oversized}
+            let x=points.map(\.x),y=points.map(\.y)
+            return CGRect(x:x.min()!,y:y.min()!,width:x.max()!-x.min()!,height:y.max()!-y.min()!)
+        }
+        let moved=try bounds(liftedBounds,forward),extent=try expandedExtent(including:moved)
+        let width=Int(extent.width),height=Int(extent.height),shiftX = -Int(extent.minX),shiftY = -Int(extent.minY)
+        var output=[UInt8](repeating:0,count:width*height*4)
+        for y in 0..<sourceImage.height {
+            output.replaceSubrange(((y+shiftY)*width+shiftX)*4..<((y+shiftY)*width+shiftX+sourceImage.width)*4,
+                with:remaining[y*sourceImage.width*4..<(y+1)*sourceImage.width*4])
+        }
+        let affected=moved.integral.intersection(extent)
+        if !affected.isNull,!affected.isEmpty {
+            for y in Int(affected.minY)..<Int(affected.maxY) {for x in Int(affected.minX)..<Int(affected.maxX) {
+                let destination=CGPoint(x:CGFloat(x)+0.5,y:CGFloat(y)+0.5).applying(toDocument)
+                guard let documentPoint=map.inverse(destination) else {continue}
+                let point=documentPoint.applying(fromDocument)
+                let floating=Self.rgbaSample(lifted,width:sourceImage.width,height:sourceImage.height,at:point,nearest:nearest)
+                let removed:Double=(x>=0 && y>=0 && x<sourceImage.width && y<sourceImage.height) ? Double(lifted[(y*sourceImage.width+x)*4+3]):0
+                let factor=removed>=255 ? 0:min(1,(255-floating.3)/(255-removed))
+                let index=((y+shiftY)*width+x+shiftX)*4
+                output[index]=Self.byte(floating.0+factor*Double(output[index]))
+                output[index+1]=Self.byte(floating.1+factor*Double(output[index+1]))
+                output[index+2]=Self.byte(floating.2+factor*Double(output[index+2]))
+                output[index+3]=Self.byte(floating.3+factor*Double(output[index+3]))
+            }}
+        }
+        let selectionWidth=selectionImage.width,selectionHeight=selectionImage.height
+        var movedMask=[UInt8](repeating:0,count:selectionWidth*selectionHeight)
+        let support=CGRect(origin:original.origin,size:original.size).insetBy(dx:nearest ? 0:-1,dy:nearest ? 0:-1)
+            .intersection(CGRect(x:0,y:0,width:selectionWidth,height:selectionHeight))
+        _=try map.projectedBounds(support)
+        let selectedBounds=try bounds(support) {point in
+            guard let result=map.forward(point) else {throw DocumentError.invalid("选区覆盖变换不可逆。")};return result
+        }.integral.intersection(CGRect(x:0,y:0,width:selectionWidth,height:selectionHeight))
+        if !selectedBounds.isNull,!selectedBounds.isEmpty {
+            for y in Int(selectedBounds.minY)..<Int(selectedBounds.maxY) {for x in Int(selectedBounds.minX)..<Int(selectedBounds.maxX) {
+                guard let point=map.inverse(CGPoint(x:CGFloat(x)+0.5,y:CGFloat(y)+0.5)) else {continue}
+                movedMask[y*selectionWidth+x]=Self.byte(Self.graySample(selectionPixels,width:selectionWidth,height:selectionHeight,at:point,nearest:nearest))
+            }}
+        }
+        return SelectionTransformResult(image:try Self.rgbaImage(output,width:width,height:height),
+            transform:try transformForExtent(extent),mask:try expandedMask(extent),
+            selection:try Self.grayImage(movedMask,width:selectionWidth,height:selectionHeight),rasterized:false)
     }
 
     private func regriddedPreview(_ transform: LayerTransform, source: SelectionTransformSource) throws -> SelectionTransformResult {

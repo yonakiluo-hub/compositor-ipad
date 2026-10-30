@@ -10,6 +10,7 @@ struct EditorView: View {
     @State private var showLibrary = false
     @State private var showAdjustments = false
     @State private var showSelectionFeather = false
+    @State private var selectionResize: SelectionResizeContext?
     @State private var showSize = false
     @State private var shareURL: URL?
     @State private var showShare = false
@@ -44,7 +45,7 @@ struct EditorView: View {
                                     .accessibilityIdentifier("viewport.resetRotation")
                                 Button { model.viewportReset += 1 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }.accessibilityLabel("适合画布")
                             }
-                            Text(model.tool == .transform ? "拖动控制点缩放 · 圆柄旋转 · 框内移动 · 双指调整视图" :
+                            Text(model.tool == .quadWarp ? "四角控制点调整形状 · 框内移动 · 双指调整视图" : model.tool == .transform ? "拖动控制点缩放 · 圆柄旋转 · 框内移动 · 双指调整视图" :
                                 model.fingerDrawing ? "手指绘画 · 双指平移、缩放、旋转" : "Pencil 绘画 · 手指平移 · 双指缩放、旋转")
                         }
                         .font(.caption).foregroundStyle(.secondary).padding(12)
@@ -56,7 +57,8 @@ struct EditorView: View {
                     }
                 }
                 Divider()
-                if model.transformSession != nil { transformBar }
+                if let session=model.quadWarpSession {QuadWarpControls(model:model,session:session).id(session.id)}
+                else if model.transformSession != nil { transformBar }
                 else { ScrollView(.horizontal, showsIndicators: false) {
                     brushBar.frame(minWidth: model.layerEditTarget == .mask && !model.tool.isSelection
                         ? max(1460, geometry.size.width) : min(900, geometry.size.width))
@@ -114,6 +116,7 @@ struct EditorView: View {
         }
         .sheet(isPresented: $showAdjustments) { AdjustmentSheet(model: model) }
         .sheet(isPresented: $showSelectionFeather) { SelectionFeatherSheet(model: model) }
+        .sheet(item:$selectionResize) { context in SelectionResizeSheet(model:model,documentID:context.documentID,revision:context.revision) }
         .sheet(isPresented: $showLibrary) { libraryView }
         .sheet(isPresented: $showShare) { if let shareURL { ShareSheet(url: shareURL) } }
     }
@@ -142,6 +145,11 @@ struct EditorView: View {
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward") }.disabled(!model.editor.canRedo).accessibilityLabel("重做").accessibilityIdentifier("editor.redo")
             Divider().frame(height: 22)
             Menu {
+                ForEach(QuadWarpMode.allCases,id:\.self) {mode in
+                    Button(mode.title) {model.beginQuadWarp(mode)}.accessibilityIdentifier("warp.begin."+mode.rawValue)
+                }
+            } label:{Image(systemName:"skew")}.accessibilityLabel("透视与扭曲").accessibilityIdentifier("editor.geometry")
+            Menu {
                 ForEach(AdjustmentKind.allCases, id: \.self) { kind in
                     Button("新建" + kind.title + "调整层", systemImage: kind.symbol) { model.beginColorAdjustment(kind) }
                         .accessibilityIdentifier("adjustment.new." + kind.rawValue)
@@ -162,7 +170,7 @@ struct EditorView: View {
     private var tools: some View {
         ScrollView {
             VStack(spacing: 6) {
-                ForEach(PadTool.allCases) { tool in
+                ForEach(PadTool.allCases.filter{$0 != .quadWarp}) { tool in
                     Button { if tool == .transform { model.beginTransform() } else { model.tool = tool } } label: {
                         Image(systemName: tool.symbol).font(.system(size: 20)).frame(width: 46, height: 44)
                             .foregroundStyle(model.tool == tool ? Color.black : Color.primary)
@@ -176,9 +184,13 @@ struct EditorView: View {
                     .accessibilityLabel(model.layerEditTarget == .mask ? "填充图层蒙版" : "填充图层或选区")
                     .accessibilityIdentifier("editor.fill")
                 Menu {
+                    Button("自动选取主体") { model.tool = .objectSelection;model.selectImage(kind:.subject) }
+                        .accessibilityIdentifier("selection.selectSubject")
                     Button("取消选区") { model.clearSelection() }
                     Button("反选") { model.invertSelection() }
                     Button("羽化当前选区…") { showSelectionFeather = true }.disabled(model.selectionPreview == nil)
+                    Button("扩展或收缩选区…") { selectionResize = SelectionResizeContext(documentID:model.document.id,revision:model.document.revision) }
+                        .disabled(model.selectionPreview == nil).accessibilityIdentifier("selection.resize")
                     Button("选区转图层蒙版") { model.selectionToLayerMask() }
                 } label: { Image(systemName: "selection.pin.in.out").font(.title3).frame(width: 46, height: 44) }.accessibilityLabel("选区操作")
             }.padding(.vertical, 16).padding(.horizontal, 6)
@@ -222,7 +234,9 @@ struct EditorView: View {
     private var brushBar: some View {
         HStack(spacing: 20) {
             Text(model.tool.rawValue).font(.subheadline.bold()).frame(width: 70, alignment: .leading)
-            if model.tool.isShapeSelection {
+            if model.tool.isTapSelection {
+                ImageSelectionControls(model:model)
+            } else if model.tool.isShapeSelection {
                 Picker("选区组合", selection: $model.selectionMode) {
                     ForEach(SelectionCombineMode.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
                 }.pickerStyle(.segmented).frame(width: 230).disabled(model.selectionDraftPointCount > 0).accessibilityIdentifier("selection.mode")

@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct ColorAdjustmentSession: Identifiable {
+struct ColorAdjustmentSession: Identifiable, Sendable {
     let id = UUID()
     let plan: AdjustmentLayerEdit
     let selectedIDs: Set<UUID>
@@ -43,9 +43,9 @@ extension EditorModel {
         guard colorAdjustmentTask == nil, let session = colorAdjustmentSession, colorAdjustmentIsCurrent(session) else { return }
         let request = colorAdjustmentPreviewRequest
         colorAdjustmentTask = Task { [weak self] in
-            let result = await Task.detached(priority: .userInitiated) {
-                Result { try DocumentRenderer().render(session.plan.preview(session.value)) }
-            }.value
+            let result = await DocumentPreviewQueue.shared.perform {
+                DocumentPreviewImage(image: try DocumentRenderer().render(session.plan.preview(session.value)))
+            }
             guard let self else { return }
             self.colorAdjustmentTask = nil
             guard let current = self.colorAdjustmentSession, self.colorAdjustmentIsCurrent(current) else { return }
@@ -56,7 +56,7 @@ extension EditorModel {
             if request == self.colorAdjustmentPreviewRequest {
                 self.colorAdjustmentPreviewPending = false
                 switch result {
-                case .success(let image): self.colorAdjustmentPreview = image
+                case .success(let image): self.colorAdjustmentPreview = image.image
                 case .failure(let error): self.colorAdjustmentPreviewError = error.localizedDescription
                 }
             } else { self.renderColorAdjustmentPreview() }
@@ -85,5 +85,6 @@ extension EditorModel {
         colorAdjustmentPreviewPending = false; colorAdjustmentPreviewError = nil
         // Keep the worker until it actually exits to bound concurrent allocations.
         colorAdjustmentPreviewRequest = UUID()
+        colorAdjustmentTask?.cancel()
     }
 }

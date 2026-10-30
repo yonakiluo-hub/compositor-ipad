@@ -78,7 +78,8 @@ extension EditorModel {
     }
 
     var displayedSelectionPreview: CGImage? {
-        transformPreviewReplacement?.selection ?? selectionPreview
+        if let session=quadWarpSession,quadWarpIsCurrent(session) {return session.result?.selection ?? selectionPreview}
+        return transformPreviewReplacement?.selection ?? selectionPreview
     }
 
     @discardableResult
@@ -214,6 +215,8 @@ extension EditorModel {
 
     func cancelTransform() {
         cancelColorAdjustment()
+        cancelImageSelection()
+        cancelQuadWarp()
         guard transformSession != nil || tool == .transform else { return }
         transformSession = nil
         if tool == .transform { tool = .move }
