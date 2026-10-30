@@ -225,6 +225,7 @@ extension EditorModel {
         cancelColorAdjustment()
         cancelImageSelection()
         cancelQuadWarp()
+        cancelCanvasCrop()
         guard transformSession != nil || tool == .transform else { return }
         transformSession = nil
         if tool == .transform { tool = .move }

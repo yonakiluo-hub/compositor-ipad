@@ -12,6 +12,7 @@ struct EditorView: View {
     @State private var showSelectionFeather = false
     @State private var selectionResize: SelectionResizeContext?
     @State private var showSize = false
+    @State private var showGuides = false
     @State private var shareURL: URL?
     @State private var showShare = false
     @State private var sidebar = true
@@ -34,7 +35,7 @@ struct EditorView: View {
                         CanvasView(model: model)
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(spacing: 12) {
-                                Text("\(model.document.width) × \(model.document.height) px")
+                                Text("\(model.document.width) × \(model.document.height) px").accessibilityIdentifier("canvas.size")
                                 Text(model.document.selectionMaskPNGData == nil ? "无选区" : "选区已启用").accessibilityIdentifier("selection.state")
                                 if model.document.selectionMaskPNGData != nil {
                                     Button("取消选区") { model.clearSelection() }
@@ -102,15 +103,17 @@ struct EditorView: View {
                 ? "清除这次生成的候选及本机、Windows 桥接缓存，删除后不能找回。已加入文稿的图层和工程备份保留。ComfyUI 自身的输入、输出文件需单独管理。"
                 : "清理这次生成的本机输入和预览缓存，以后刷新不会再显示。已加入文稿的图层、工程备份和 Windows 文件保留。")
         }
-        .fileImporter(isPresented: $showImporter, allowedContentTypes: importKind == 2 ? [.json] : importKind == 1 ? [UTType(importedAs: "com.compositor.project"), .folder] : [.png, .jpeg, .heic, .tiff], allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: importKind == 2 ? [.json] : importKind == 1 ? [UTType(importedAs: "com.compositor.project"), .folder] : importKind == 3 ? [UTType(importedAs: "com.adobe.photoshop-image")] : ImageFileCodec.importTypes, allowsMultipleSelection: false) { result in
             switch result {
-            case .success(let urls): if let url = urls.first { if importKind == 2 { model.importPairing(url) } else if importKind == 1 { model.open(url) } else { model.importImage(url) } }
+            case .success(let urls): if let url = urls.first { if importKind == 2 { model.importPairing(url) } else if importKind == 1 { model.open(url) } else if importKind == 3 { model.openPSD(url) } else { model.importImage(url) } }
             case .failure(let error): model.errorMessage = error.localizedDescription
             }
         }
         .sheet(isPresented: Binding(get: { compactLayout && sidebar }, set: { sidebar = $0 })) { sidebarContent.presentationDetents([.medium, .large]) }
         .sheet(isPresented: $showNew) { NewDocumentSheet(model: model) }
         .sheet(isPresented: $showSize) { NewDocumentSheet(model: model, resizing: true) }
+        .sheet(isPresented: Binding(get: { model.cropSession != nil }, set: { if !$0 { model.cancelCanvasCrop() } })) { CanvasCropSheet(model: model) }
+        .sheet(isPresented: $showGuides) { CanvasGuidesSheet(model: model) }
         .sheet(isPresented: Binding(get: { model.colorAdjustmentSession != nil }, set: { if !$0 { model.cancelColorAdjustment() } })) {
             ColorAdjustmentSheet(model: model)
         }
@@ -138,8 +141,16 @@ struct EditorView: View {
                 Button("分享分层 .comp 工程") { model.saveNow(); if !model.saveFailed { shareURL = model.documentURL; showShare = true } }
                 Button("导出 PNG") { share(model.exportImage()) }
                 Button("导出 JPEG（白底）") { share(model.exportImage(jpeg: true)) }
+                Menu("PSD 与其他格式") {
+                    Button("打开分层 PSD…") { importKind = 3; showImporter = true }.accessibilityIdentifier("file.openPSD")
+                    Button("导出分层 PSD（栅格子集）") { share(model.exportFile(.psd)) }.accessibilityIdentifier("file.exportPSD")
+                    Button("导出 TIFF（透明）") { share(model.exportFile(.tiff)) }.accessibilityIdentifier("file.exportTIFF")
+                    Button("导出 PDF（单页图像）") { share(model.exportFile(.pdf)) }.accessibilityIdentifier("file.exportPDF")
+                }
                 Divider()
                 Button("画布与图像大小") { showSize = true }
+                Button("裁切画布（保留框外像素）") { model.beginCanvasCrop() }.accessibilityIdentifier("canvas.crop")
+                Button("辅助线…") { showGuides = true }.accessibilityIdentifier("canvas.guides")
             } label: { Image(systemName: "square.grid.2x2").font(.title3) }.accessibilityLabel("文件菜单")
             VStack(alignment: .leading, spacing: 3) {
                 Button(model.document.name) { documentName = model.document.name; showRename = true }

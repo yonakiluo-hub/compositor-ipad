@@ -90,14 +90,16 @@ public struct CanvasDocument: Equatable, Identifiable, Sendable {
     public var selectionMaskPNGData: Data?
     /// Persistent receipt ledger, kept across undo and redo to prevent a repeated download applying twice.
     public var appliedAIResults: Set<AIResultKey>
+    public var guides: [CanvasGuide]
 
     public init(id: UUID = UUID(), name: String = "未命名", width: Int, height: Int,
                 revision: Int64 = 0, resolution: Double = 72, layers: [RasterLayer] = [],
                 activeLayerID: UUID? = nil, selectionMaskPNGData: Data? = nil,
-                appliedAIResults: Set<AIResultKey> = []) {
+                appliedAIResults: Set<AIResultKey> = [], guides: [CanvasGuide] = []) {
         self.id = id; self.name = name; self.width = width; self.height = height; self.revision = revision
         self.resolution = resolution; self.layers = layers; self.activeLayerID = activeLayerID
         self.selectionMaskPNGData = selectionMaskPNGData; self.appliedAIResults = appliedAIResults
+        self.guides = guides
     }
 
     public var size: CGSize { CGSize(width: width, height: height) }
@@ -120,6 +122,7 @@ public struct CanvasDocument: Equatable, Identifiable, Sendable {
               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.utf8.count <= 16_384
         else { throw DocumentError.invalid("文稿名称、版本或分辨率无效") }
         try LayerHierarchy.validate(layers)
+        try CanvasGuide.validate(guides)
         var pixels = 0, maskPixels = 0, contentBytes = 0
         for layer in layers {
             contentBytes += layer.text?.estimatedBytes ?? 0
